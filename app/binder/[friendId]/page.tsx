@@ -4,9 +4,6 @@ import { useEffect, useState, use } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useRouter } from 'next/navigation';
 
-// 🛑 Obbliga Next.js a renderizzare la pagina a runtime ed evitare errori su Vercel
-export const dynamic = 'force-dynamic';
-
 interface CardItem {
   id: string;
   card_id: string;
@@ -27,7 +24,7 @@ export default function FriendBinderPage({ params }: { params: Promise<{ friendI
   const [friendEmail, setFriendEmail] = useState('');
   const [friendAvatar, setFriendAvatar] = useState('');
   const [friendCards, setFriendCards] = useState<CardItem[]>([]);
-  const [loading, setLoading] = useState(true); // <--- CORRETTO DA 0 A true
+  const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const router = useRouter();
 
