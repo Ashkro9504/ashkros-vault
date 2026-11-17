@@ -4,6 +4,9 @@ import { useEffect, useState, use } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useRouter } from 'next/navigation';
 
+// 🛑 Obbliga Next.js a trattare questa rotta dinamica come bloccante in fase di build
+export const instant = false;
+
 interface CardItem {
   id: string;
   card_id: string;
@@ -29,6 +32,8 @@ export default function FriendBinderPage({ params }: { params: Promise<{ friendI
   const router = useRouter();
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
     async function loadFriendBinder() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
@@ -38,7 +43,6 @@ export default function FriendBinderPage({ params }: { params: Promise<{ friendI
         }
         setCurrentUser(user);
 
-        // 1. Carica le informazioni del profilo dell'amico
         const { data: profileData, error: profileError } = await supabase
           .from('profiles')
           .select('email, avatar_url')
@@ -52,7 +56,6 @@ export default function FriendBinderPage({ params }: { params: Promise<{ friendI
         setFriendEmail(profileData.email);
         setFriendAvatar(profileData.avatar_url || '');
 
-        // 2. Carica le carte nel binder dell'amico
         const { data: cardsData, error: cardsError } = await supabase
           .from('user_cards')
           .select('*')
@@ -93,7 +96,6 @@ export default function FriendBinderPage({ params }: { params: Promise<{ friendI
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12 pb-24">
       <div className="max-w-6xl mx-auto space-y-8">
         
-        {/* Header di navigazione e info amico */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl gap-4">
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 rounded-full bg-slate-950 border border-amber-500/40 flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -127,7 +129,6 @@ export default function FriendBinderPage({ params }: { params: Promise<{ friendI
           </div>
         )}
 
-        {/* Griglia delle carte dell'amico */}
         <div className="space-y-4">
           <div className="flex justify-between items-center px-1">
             <h2 className="text-sm font-bold text-slate-300">Collezione Pokémon ({friendCards.length} carte)</h2>
