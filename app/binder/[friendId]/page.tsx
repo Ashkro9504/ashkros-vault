@@ -2,169 +2,176 @@
 
 import { useEffect, useState, use } from 'react';
 import { supabase } from '../../lib/supabase';
-import { QRCodeSVG } from 'qrcode.react';
+import { useRouter } from 'next/navigation';
+
+// 🛑 Obbliga Next.js a renderizzare la pagina a runtime ed evitare errori su Vercel
+export const dynamic = 'force-dynamic';
 
 interface CardItem {
   id: string;
-  card_name: string;
-  set_name: string | null;
-  card_number: string | null;
-  rarity: string | null;
-  image_url: string | null;
-  is_graded: string | null;
-  grade: string | null;
-  language: string | null;
-  public_qr_code_id: string;
+  card_id: string;
+  name: string;
+  images: {
+    small: string;
+    large: string;
+  };
+  set_name: string;
+  rarity: string;
 }
 
 export default function FriendBinderPage({ params }: { params: Promise<{ friendId: string }> }) {
   const resolvedParams = use(params);
   const friendId = resolvedParams.friendId;
 
-  const [cards, setCards] = useState<CardItem[]>([]);
-  const [ownerEmail, setOwnerEmail] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [friendEmail, setFriendEmail] = useState('');
+  const [friendAvatar, setFriendAvatar] = useState('');
+  const [friendCards, setFriendCards] = useState<CardItem[]>([]);
+  const [loading, setLoading] = useState(true); // <--- CORRETTO DA 0 A true
+  const [errorMsg, setErrorMsg] = useState('');
+  const router = useRouter();
 
   useEffect(() => {
-    async function fetchFriendVault() {
-      // 1. Recupera l'email del proprietario del binder dalla tabella profiles
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('id', friendId)
-        .single();
+    async function loadFriendBinder() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          router.push('/login');
+          return;
+        }
+        setCurrentUser(user);
 
-      if (profileData) {
-        setOwnerEmail(profileData.email);
+        // 1. Carica le informazioni del profilo dell'amico
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('email, avatar_url')
+          .eq('id', friendId)
+          .single();
+
+        if (profileError || !profileData) {
+          throw new Error('Impossibile trovare il profilo di questo collezionista.');
+        }
+
+        setFriendEmail(profileData.email);
+        setFriendAvatar(profileData.avatar_url || '');
+
+        // 2. Carica le carte nel binder dell'amico
+        const { data: cardsData, error: cardsError } = await supabase
+          .from('user_cards')
+          .select('*')
+          .eq('user_id', friendId);
+
+        if (cardsError) {
+          throw new Error('Errore durante il caricamento del binder dell\'amico.');
+        }
+
+        const formattedCards: CardItem[] = (cardsData || []).map((item) => ({
+          id: item.id,
+          card_id: item.card_id,
+          name: item.card_name || 'Carta Pokémon',
+          images: {
+            small: item.card_image || '',
+            large: item.card_image || '',
+          },
+          set_name: item.set_name || 'Set sconosciuto',
+          rarity: item.rarity || 'Comune',
+        }));
+
+        setFriendCards(formattedCards);
+      } catch (err: any) {
+        setErrorMsg(err.message || 'Errore imprevisto.');
+      } finally {
+        setLoading(false);
       }
-
-      // 2. Recupera le carte del proprietario (Sola Lettura)
-      const { data, error } = await supabase
-        .from('cards')
-        .select('*')
-        .eq('user_id', friendId)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Errore nel recupero del binder:', error);
-      } else if (data) {
-        setCards(data);
-      }
-      setLoading(false);
     }
 
-    fetchFriendVault();
-  }, [friendId]);
+    loadFriendBinder();
+  }, [friendId, router]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
-        Apertura Vault condiviso in corso...
-      </div>
-    );
+    return <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">Caricamento binder del collezionista...</div>;
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12">
-      <div className="max-w-7xl mx-auto space-y-8">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12 pb-24">
+      <div className="max-w-6xl mx-auto space-y-8">
         
-        {/* Header Sola Lettura */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-amber-400 font-black text-lg">🛡️ Ashkro's Vault</span>
-              <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] px-2 py-0.5 rounded-full font-mono">
-                Read-Only View (Amico)
-              </span>
+        {/* Header di navigazione e info amico */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-full bg-slate-950 border border-amber-500/40 flex items-center justify-center overflow-hidden flex-shrink-0">
+              {friendAvatar ? (
+                <img src={friendAvatar} alt="Avatar Amico" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-amber-400 font-bold text-xl">🛡️</span>
+              )}
             </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Stai esplorando il binder di <span className="text-slate-200 font-semibold">{ownerEmail || 'Collezionista'}</span>
-            </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 text-amber-400 px-2 py-0.5 rounded-full font-mono uppercase tracking-wider">
+                  Binder in Sola Lettura
+                </span>
+              </div>
+              <h1 className="text-lg md:text-xl font-bold text-slate-100 mt-1">{friendEmail}</h1>
+            </div>
           </div>
 
           <a
             href="/profile"
-            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs transition-all border border-slate-700"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
           >
-            ← Torna al Profilo
+            ← Torna al tuo Profilo
           </a>
         </div>
 
-        {/* Griglia delle carte dell'amico */}
-        {cards.length === 0 ? (
-          <div className="text-center py-20 bg-slate-900/50 border border-slate-800/80 rounded-3xl">
-            <p className="text-slate-400 text-sm">Questo collezionista non ha ancora inserito carte nel suo Vault.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {cards.map((card) => (
-              <div
-                key={card.id}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-xl"
-              >
-                <div>
-                  {/* Immagine della carta */}
-                  {card.image_url && (
-                    <div className="relative h-64 mb-4 flex items-center justify-center bg-slate-950/50 rounded-xl p-2 border border-slate-800/50">
-                      <img
-                        src={card.image_url}
-                        alt={card.card_name}
-                        className="max-h-full object-contain drop-shadow-lg"
-                      />
-                    </div>
-                  )}
-
-                  {/* Badge Lingua e Stato */}
-                  <div className="w-full mb-3 flex gap-2">
-                    <span className="bg-slate-950 border border-slate-800 text-slate-300 text-[10px] font-bold px-2 py-1 rounded-lg">
-                      🌐 {card.language || 'IT'}
-                    </span>
-                    {card.is_graded === 'graded' ? (
-                      <div className="flex-1 bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold px-2 py-1 rounded-lg flex justify-between items-center">
-                        <span>🛡️ GRADATA</span>
-                        <span className="font-mono">{card.grade || 'N/D'}</span>
-                      </div>
-                    ) : (
-                      <div className="flex-1 bg-slate-950 border border-slate-800 text-slate-400 text-[10px] font-medium px-2 py-1 rounded-lg text-center">
-                        RAW
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Informazioni carta */}
-                  <h3 className="font-bold text-slate-100 text-sm truncate">{card.card_name}</h3>
-                  <p className="text-xs text-amber-400 font-medium truncate mt-0.5">
-                    {card.set_name} • #{card.card_number}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-1">Rarità: {card.rarity || 'N/D'}</p>
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-slate-800 space-y-3">
-                  {/* Link passaporto QR e miniatura QR */}
-                  <div className="flex items-center justify-between">
-                    <div className="text-[10px] space-y-0.5">
-                      <span className="text-amber-400 font-semibold block">Passaporto QR</span>
-                      <a
-                        href={`/card/${card.public_qr_code_id || card.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-slate-300 underline hover:text-amber-400 transition-colors block"
-                      >
-                        Apri Scheda ↗
-                      </a>
-                    </div>
-                    <div className="bg-white p-1 rounded-lg shadow-sm">
-                      <QRCodeSVG
-                        value={`${typeof window !== 'undefined' ? window.location.origin : ''}/card/${card.public_qr_code_id || card.id}`}
-                        size={40}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
+        {errorMsg && (
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-4 rounded-xl">
+            {errorMsg}
           </div>
         )}
+
+        {/* Griglia delle carte dell'amico */}
+        <div className="space-y-4">
+          <div className="flex justify-between items-center px-1">
+            <h2 className="text-sm font-bold text-slate-300">Collezione Pokémon ({friendCards.length} carte)</h2>
+          </div>
+
+          {friendCards.length === 0 ? (
+            <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-12 text-center space-y-2">
+              <span className="text-3xl">📭</span>
+              <p className="text-sm text-slate-300 font-semibold">Questo binder è attualmente vuoto.</p>
+              <p className="text-xs text-slate-500">Il collezionista non ha ancora aggiunto carte Pokémon alla sua vetrina pubblica.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              {friendCards.map((card) => (
+                <div
+                  key={card.id}
+                  className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex flex-col items-center justify-between shadow-lg group hover:border-amber-500/50 transition-all"
+                >
+                  <div className="w-full flex justify-center mb-2 overflow-hidden rounded-xl bg-slate-950 p-2">
+                    {card.images.small ? (
+                      <img
+                        src={card.images.small}
+                        alt={card.name}
+                        className="h-48 object-contain group-hover:scale-105 transition-transform duration-300 drop-shadow-md"
+                      />
+                    ) : (
+                      <div className="h-48 flex items-center justify-center text-xs text-slate-600">Nessuna immagine</div>
+                    )}
+                  </div>
+                  <div className="w-full text-center space-y-1">
+                    <h3 className="font-bold text-slate-200 text-xs truncate" title={card.name}>{card.name}</h3>
+                    <p className="text-[10px] text-slate-400 truncate">{card.set_name}</p>
+                    <span className="inline-block text-[9px] bg-slate-950 border border-slate-800 text-amber-400 px-2 py-0.5 rounded-full font-mono mt-1">
+                      {card.rarity}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
       </div>
     </div>
