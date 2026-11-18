@@ -1,8 +1,5 @@
+import { Suspense } from 'react';
 import EditCardClient from './EditCardClient';
-
-// 🛑 FORZA IL RENDERING DINAMICO AL 100% (Disabilita il prerender statico che fa fallire Vercel)
-export const dynamic = 'force-dynamic';
-export const fetchCache = 'force-no-store';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -10,5 +7,10 @@ interface PageProps {
 
 export default async function Page({ params }: PageProps) {
   const resolvedParams = await params;
-  return <EditCardClient cardId={resolvedParams.id} />;
+
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">Caricamento carta...</div>}>
+      <EditCardClient cardId={resolvedParams.id} />
+    </Suspense>
+  );
 }
