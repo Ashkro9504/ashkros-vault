@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase'; // <-- Usando @/ punti sempre dritto alla radice
+import { supabase } from '../../lib/supabase';
 import { useRouter } from 'next/navigation';
 
 interface CardItem {
@@ -15,7 +15,7 @@ interface CardItem {
   set_name: string;
   rarity: string;
 }
-// ... resto del codice ...
+
 export default function FriendBinderClient({ friendId }: { friendId: string }) {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [friendEmail, setFriendEmail] = useState('');
@@ -59,14 +59,7 @@ export default function FriendBinderClient({ friendId }: { friendId: string }) {
           throw new Error('Errore durante il caricamento del binder dell\'amico.');
         }
 
-        const formattedCards: CardItem[] = (cardsData || []).map((item: {
-          id: string;
-          card_id: string;
-          card_name: string | null;
-          card_image: string | null;
-          set_name: string | null;
-          rarity: string | null;
-        }) => ({
+        const formattedCards: CardItem[] = (cardsData || []).map((item) => ({
           id: item.id,
           card_id: item.card_id,
           name: item.card_name || 'Carta Pokémon',
