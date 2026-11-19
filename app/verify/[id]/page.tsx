@@ -1,82 +1,93 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 
-export default function VerifyCardPage() {
+function VerifyCardContent() {
   const params = useParams();
-  const id = params?.id;
+  const id = params?.id as string | undefined;
+
   const [card, setCard] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
-    if (!id) return;
-
-    async function fetchCard() {
-      // Cerca la carta su Supabase tramite il suo ID univoco
-      const { data, error } = await supabase
-        .from('cards')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) {
-        console.error('Errore nel recupero della carta:', error.message);
-      } else {
-        setCard(data);
-      }
+    if (!id) {
       setLoading(false);
+      return;
     }
 
-    fetchCard();
+    async function loadVerifiedCard() {
+      try {
+        setLoading(true);
+        setErrorMsg('');
+
+        const { data, error } = await supabase
+          .from('user_cards')
+          .select('*')
+          .eq('id', id)
+          .single();
+
+        if (error || !data) {
+          throw new Error('Certificato o carta non trovata.');
+        }
+
+        setCard(data);
+      } catch (err: any) {
+        setErrorMsg(err.message || 'Errore durante la verifica.');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadVerifiedCard();
   }, [id]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
-        Verifica autenticità in corso...
+      <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+        Verifica certificato in corso...
       </div>
     );
   }
 
-  if (!card) {
+  if (errorMsg) {
     return (
-      <div className="min-h-screen bg-slate-950 text-red-400 flex items-center justify-center p-6 text-center">
-        Carta non trovata o inesistente nel registry di Ashkro's Vault.
+      <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex items-center justify-center">
+        <div className="max-w-md w-full bg-slate-900 border border-red-500/30 text-red-400 text-xs p-6 rounded-2xl">
+          {errorMsg}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex flex-col items-center justify-center">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-4">
-        <div className="inline-block px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-semibold rounded-full border border-emerald-500/20">
-          ✔ Carta Verificata & Autenticata
-        </div>
-
-        {card.image_url && (
-          <img 
-            src={card.image_url} 
-            alt={card.card_name} 
-            className="w-48 h-auto mx-auto rounded-xl shadow-lg object-cover aspect-[5/7] border border-slate-800"
-          />
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12">
+      <div className="max-w-xl mx-auto bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
+        <h1 className="text-lg font-bold text-amber-400">Verifica Autenticità Carta</h1>
+        {card && (
+          <div className="space-y-2 text-xs text-slate-300">
+            <p><span className="text-slate-400">Carta:</span> {card.card_name}</p>
+            <p><span className="text-slate-400">Set:</span> {card.set_name}</p>
+            <p><span className="text-slate-400">Gradazione:</span> {card.grade_company || 'Raw'} {card.grade_score || ''}</p>
+          </div>
         )}
-
-        <h1 className="text-2xl font-bold text-amber-400">{card.card_name}</h1>
-        
-        <div className="text-xs text-slate-400 space-y-1">
-          <p><strong>Set:</strong> {card.set_name || 'N/D'}</p>
-          <p><strong>Numero:</strong> {card.card_number || 'N/D'}</p>
-          <p><strong>Rarità:</strong> {card.rarity || 'N/D'}</p>
-          <p><strong>Condizioni:</strong> {card.condition_notes}</p>
-        </div>
-
-        <div className="pt-4 border-t border-slate-800 text-left text-xs text-slate-500 space-y-1">
-          <p>Registrato ufficialmente su Ashkro's Vault.</p>
-          <p className="truncate">ID Univoco: {card.id}</p>
-        </div>
       </div>
     </div>
+  );
+}
+
+export default function VerifyCardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+          Caricamento verifica...
+        </div>
+      }
+    >
+      <VerifyCardContent />
+    </Suspense>
   );
 }
