@@ -51,7 +51,7 @@ export default function FriendBinderClient({ friendId }: { friendId: string }) {
         setFriendAvatar(profileData.avatar_url || '');
 
         const { data: cardsData, error: cardsError } = await supabase
-          .from('user_cards')
+          .from('cards')
           .select('*')
           .eq('user_id', friendId);
 
