@@ -26,7 +26,7 @@ export default function AddCardClient() {
   const [hasSearched, setHasSearched] = useState(false);
   const [loadingCardDetails, setLoadingCardDetails] = useState(false);
 
-  // Dati carta da salvare nel binder / user_cards
+  // Campi della carta
   const [cardName, setCardName] = useState('');
   const [setName, setSetName] = useState('');
   const [rarity, setRarity] = useState('');
@@ -37,17 +37,28 @@ export default function AddCardClient() {
   const [purchasePrice, setPurchasePrice] = useState('');
 
   useEffect(() => {
+    let isMounted = true;
+
     async function checkSession() {
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!isMounted) return;
+
+      if (!session?.user) {
+        router.replace('/login');
         return;
       }
+
       setCheckingAuth(false);
     }
+
     checkSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, [router]);
 
   const handleSearchByName = async (e: React.FormEvent) => {
@@ -62,11 +73,11 @@ export default function AddCardClient() {
       setSearching(true);
       setHasSearched(true);
       setErrorMsg('');
+      setSuccessMsg('');
       setSearchResults([]);
 
       const encoded = encodeURIComponent(query);
 
-      // Cerca in tutte le espansioni in italiano, poi integra con quelle in inglese se necessario
       const [itRes, enRes] = await Promise.allSettled([
         fetch(`https://api.tcgdex.net/v2/it/cards?name=${encoded}`),
         fetch(`https://api.tcgdex.net/v2/en/cards?name=${encoded}`),
@@ -104,8 +115,8 @@ export default function AddCardClient() {
     try {
       setLoadingCardDetails(true);
       setErrorMsg('');
+      setSuccessMsg('');
 
-      // Prova prima il dettaglio in italiano, poi in inglese
       let detail: any = null;
       const itDetailRes = await fetch(`https://api.tcgdex.net/v2/it/cards/${item.id}`);
       if (itDetailRes.ok) {
@@ -135,6 +146,8 @@ export default function AddCardClient() {
 
   const handleSaveToBinder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+
     setErrorMsg('');
     setSuccessMsg('');
 
@@ -143,40 +156,66 @@ export default function AddCardClient() {
       return;
     }
 
-    try {
-      setSaving(true);
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
+    setSaving(true);
 
-      if (authError || !user) {
-        router.push('/login');
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.user) {
+        setSaving(false);
+        setErrorMsg('Sessione scaduta: effettua nuovamente il login e riprova.');
         return;
       }
 
-      const { error } = await supabase.from('user_cards').insert({
-        user_id: user.id,
+      const parsedScore = gradeScore.trim() !== '' ? Number(gradeScore) : null;
+      const parsedPrice = purchasePrice.trim() !== '' ? Number(purchasePrice) : null;
+
+      if (parsedScore !== null && Number.isNaN(parsedScore)) {
+        setSaving(false);
+        setErrorMsg('Il voto di gradazione deve essere un numero valido.');
+        return;
+      }
+
+      if (parsedPrice !== null && Number.isNaN(parsedPrice)) {
+        setSaving(false);
+        setErrorMsg('Il prezzo di acquisto deve essere un numero valido.');
+        return;
+      }
+
+      const payload = {
+        user_id: session.user.id,
         card_name: cardName.trim(),
         set_name: setName.trim() || null,
         rarity: rarity.trim() || null,
+        card_number: cardNumber.trim() || null,
         card_image: cardImage.trim() || null,
         grade_company: gradeCompany.trim() || null,
-        grade_score: gradeScore ? parseFloat(gradeScore) : null,
-        purchase_price: purchasePrice ? parseFloat(purchasePrice) : null,
-      });
+        grade_score: parsedScore,
+        purchase_price: parsedPrice,
+      };
 
-      if (error) throw error;
+      const { error: insertError } = await supabase
+        .from('user_cards')
+        .insert(payload);
 
-      setSuccessMsg('Carta salvata nel tuo binder!');
+      if (insertError) {
+        setSaving(false);
+        setErrorMsg(`Errore salvataggio Supabase: ${insertError.message}`);
+        return;
+      }
+
+      setSaving(false);
+      setSuccessMsg('Carta salvata correttamente nel tuo binder!');
+
       setTimeout(() => {
         router.push('/profile');
-        router.refresh();
-      }, 800);
+      }, 900);
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Errore durante il salvataggio nel binder.');
-    } finally {
       setSaving(false);
+      setErrorMsg(err?.message || 'Errore imprevisto durante il salvataggio.');
     }
   };
 
@@ -198,22 +237,23 @@ export default function AddCardClient() {
               Cerca per nome in tutte le espansioni e salva nella tua collezione
             </p>
           </div>
-          <a
-            href="/profile"
+          <button
+            type="button"
+            onClick={() => router.push('/profile')}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
           >
             ← Indietro
-          </a>
+          </button>
         </div>
 
         {errorMsg && (
-          <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-4 rounded-xl">
+          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs p-4 rounded-xl font-medium">
             {errorMsg}
           </div>
         )}
 
         {successMsg && (
-          <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs p-4 rounded-xl">
+          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl font-medium">
             {successMsg}
           </div>
         )}
