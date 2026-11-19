@@ -1,6 +1,16 @@
-import EditCardClient from './EditCardClient';
+import { Suspense } from 'react';
+import AddCardClient from './AddCardClient';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  const resolvedParams = await params;
-  return <EditCardClient cardId={resolvedParams.id} />;
+export default function AddCardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+          Caricamento Aggiungi Carta...
+        </div>
+      }
+    >
+      <AddCardClient />
+    </Suspense>
+  );
 }
