@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '../lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 interface ApiCardItem {
   id: string;
@@ -166,7 +166,7 @@ export default function AddCardClient() {
 
       if (sessionError || !session?.user) {
         setSaving(false);
-        setErrorMsg('Sessione scaduta: effettua nuovamente il login e riprova.');
+        setErrorMsg('Sessione non valida: effettua il login e riprova.');
         return;
       }
 
@@ -197,9 +197,11 @@ export default function AddCardClient() {
         purchase_price: parsedPrice,
       };
 
-      const { error: insertError } = await supabase
+      const { data: insertedRow, error: insertError } = await supabase
         .from('user_cards')
-        .insert(payload);
+        .insert(payload)
+        .select()
+        .single();
 
       if (insertError) {
         setSaving(false);
@@ -208,11 +210,9 @@ export default function AddCardClient() {
       }
 
       setSaving(false);
-      setSuccessMsg('Carta salvata correttamente nel tuo binder!');
-
-      setTimeout(() => {
-        router.push('/profile');
-      }, 900);
+      setSuccessMsg(
+        `Salvata su Supabase: "${insertedRow?.card_name || cardName.trim()}" (ID: ${insertedRow?.id || 'ok'}).`
+      );
     } catch (err: any) {
       setSaving(false);
       setErrorMsg(err?.message || 'Errore imprevisto durante il salvataggio.');
@@ -242,7 +242,7 @@ export default function AddCardClient() {
             onClick={() => router.push('/profile')}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
           >
-            ← Indietro
+            ← Vai al Profilo
           </button>
         </div>
 
@@ -253,8 +253,15 @@ export default function AddCardClient() {
         )}
 
         {successMsg && (
-          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl font-medium">
-            {successMsg}
+          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl font-medium flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <span>{successMsg}</span>
+            <button
+              type="button"
+              onClick={() => router.push('/profile')}
+              className="px-3 py-1.5 bg-emerald-500 text-slate-950 font-bold rounded-lg self-start sm:self-auto"
+            >
+              Apri Profilo
+            </button>
           </div>
         )}
 
