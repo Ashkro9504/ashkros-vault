@@ -4,6 +4,13 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 
+interface ApiCardItem {
+  id: string;
+  name: string;
+  image?: string;
+  localId?: string;
+}
+
 export default function AddCardClient() {
   const router = useRouter();
 
@@ -12,9 +19,18 @@ export default function AddCardClient() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  // Ricerca per solo nome carta su tutte le espansioni
+  const [searchName, setSearchName] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<ApiCardItem[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [loadingCardDetails, setLoadingCardDetails] = useState(false);
+
+  // Dati carta da salvare nel binder / user_cards
   const [cardName, setCardName] = useState('');
   const [setName, setSetName] = useState('');
   const [rarity, setRarity] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
   const [cardImage, setCardImage] = useState('');
   const [gradeCompany, setGradeCompany] = useState('');
   const [gradeScore, setGradeScore] = useState('');
@@ -22,7 +38,9 @@ export default function AddCardClient() {
 
   useEffect(() => {
     async function checkSession() {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) {
         router.push('/login');
         return;
@@ -32,19 +50,106 @@ export default function AddCardClient() {
     checkSession();
   }, [router]);
 
-  const handleCreateCard = async (e: React.FormEvent) => {
+  const handleSearchByName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const query = searchName.trim();
+    if (!query) {
+      setErrorMsg('Inserisci il nome della carta da cercare.');
+      return;
+    }
+
+    try {
+      setSearching(true);
+      setHasSearched(true);
+      setErrorMsg('');
+      setSearchResults([]);
+
+      const encoded = encodeURIComponent(query);
+
+      // Cerca in tutte le espansioni in italiano, poi integra con quelle in inglese se necessario
+      const [itRes, enRes] = await Promise.allSettled([
+        fetch(`https://api.tcgdex.net/v2/it/cards?name=${encoded}`),
+        fetch(`https://api.tcgdex.net/v2/en/cards?name=${encoded}`),
+      ]);
+
+      const merged: ApiCardItem[] = [];
+      const seenIds = new Set<string>();
+
+      const appendResults = async (res: PromiseSettledResult<Response>) => {
+        if (res.status === 'fulfilled' && res.value.ok) {
+          const json = await res.value.json();
+          if (Array.isArray(json)) {
+            for (const item of json) {
+              if (item?.id && !seenIds.has(item.id)) {
+                seenIds.add(item.id);
+                merged.push(item);
+              }
+            }
+          }
+        }
+      };
+
+      await appendResults(itRes);
+      await appendResults(enRes);
+
+      setSearchResults(merged.slice(0, 24));
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Errore durante la ricerca delle carte.');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleSelectCard = async (item: ApiCardItem) => {
+    try {
+      setLoadingCardDetails(true);
+      setErrorMsg('');
+
+      // Prova prima il dettaglio in italiano, poi in inglese
+      let detail: any = null;
+      const itDetailRes = await fetch(`https://api.tcgdex.net/v2/it/cards/${item.id}`);
+      if (itDetailRes.ok) {
+        detail = await itDetailRes.json();
+      } else {
+        const enDetailRes = await fetch(`https://api.tcgdex.net/v2/en/cards/${item.id}`);
+        if (enDetailRes.ok) {
+          detail = await enDetailRes.json();
+        }
+      }
+
+      const source = detail || item;
+      const baseImage = source.image || item.image || '';
+
+      setCardName(source.name || item.name || '');
+      setSetName(source.set?.name || '');
+      setRarity(source.rarity || '');
+      setCardNumber(source.localId || item.localId || '');
+      setCardImage(baseImage ? `${baseImage}/high.webp` : '');
+    } catch {
+      setCardName(item.name || '');
+      setCardImage(item.image ? `${item.image}/high.webp` : '');
+    } finally {
+      setLoadingCardDetails(false);
+    }
+  };
+
+  const handleSaveToBinder = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
 
     if (!cardName.trim()) {
-      setErrorMsg('Inserisci almeno il nome della carta.');
+      setErrorMsg('Seleziona una carta dai risultati o inserisci almeno il nome.');
       return;
     }
 
     try {
       setSaving(true);
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
       if (authError || !user) {
         router.push('/login');
         return;
@@ -63,13 +168,13 @@ export default function AddCardClient() {
 
       if (error) throw error;
 
-      setSuccessMsg('Carta aggiunta al tuo Vault!');
+      setSuccessMsg('Carta salvata nel tuo binder!');
       setTimeout(() => {
         router.push('/profile');
         router.refresh();
       }, 800);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Errore durante il salvataggio della carta.');
+      setErrorMsg(err?.message || 'Errore durante il salvataggio nel binder.');
     } finally {
       setSaving(false);
     }
@@ -84,10 +189,15 @@ export default function AddCardClient() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12 pb-24">
-      <div className="max-w-xl mx-auto space-y-8">
-        <div className="flex justify-between items-center bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
-          <h1 className="text-lg font-bold text-slate-100">Aggiungi Carta</h1>
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-12 pb-24">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div className="flex justify-between items-center bg-slate-900 border border-slate-800 p-5 sm:p-6 rounded-2xl shadow-xl">
+          <div>
+            <h1 className="text-lg font-bold text-slate-100">Aggiungi Carta al Binder</h1>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Cerca per nome in tutte le espansioni e salva nella tua collezione
+            </p>
+          </div>
           <a
             href="/profile"
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
@@ -108,129 +218,203 @@ export default function AddCardClient() {
           </div>
         )}
 
-        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-6">
-          {cardImage.trim() && (
-            <div className="flex items-center gap-4 bg-slate-950 p-4 rounded-xl border border-slate-800">
-              <img
-                src={cardImage.trim()}
-                alt={cardName || 'Anteprima carta'}
-                className="w-20 h-28 object-contain rounded-lg"
-              />
-              <div>
-                <h2 className="font-bold text-sm text-slate-100">{cardName || 'Nome carta'}</h2>
-                <p className="text-xs text-slate-400">{setName || 'Set'}</p>
-                {rarity && (
-                  <span className="inline-block text-[10px] bg-slate-900 border border-slate-800 text-amber-400 px-2 py-0.5 rounded-full font-mono mt-2">
-                    {rarity}
-                  </span>
-                )}
-              </div>
-            </div>
+        {/* Ricerca per solo nome carta */}
+        <div className="bg-slate-900 border border-slate-800 p-5 sm:p-6 rounded-2xl shadow-xl space-y-4">
+          <form onSubmit={handleSearchByName} className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              value={searchName}
+              onChange={(e) => setSearchName(e.target.value)}
+              placeholder="Nome carta (es. Charizard, Zekrom, Pikachu...)"
+              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+            />
+            <button
+              type="submit"
+              disabled={searching}
+              className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl transition-all disabled:opacity-50"
+            >
+              {searching ? 'Ricerca...' : 'Cerca Carta'}
+            </button>
+          </form>
+
+          {loadingCardDetails && (
+            <p className="text-xs text-amber-400">Caricamento immagine e dati espansione...</p>
           )}
 
-          <form onSubmit={handleCreateCard} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Nome Carta *
-              </label>
-              <input
-                type="text"
-                required
-                value={cardName}
-                onChange={(e) => setCardName(e.target.value)}
-                placeholder="Es. Zekrom ex / Charizard"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-              />
-            </div>
+          {hasSearched && !searching && searchResults.length === 0 && (
+            <p className="text-xs text-slate-400">
+              Nessuna carta trovata con questo nome. Puoi comunque compilare i campi qui sotto a mano.
+            </p>
+          )}
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Set / Espansione
-              </label>
-              <input
-                type="text"
-                value={setName}
-                onChange={(e) => setSetName(e.target.value)}
-                placeholder="Es. Black Bolt / Inferno X"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-              />
+          {searchResults.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+              {searchResults.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectCard(item)}
+                  className="group text-left bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-amber-500/60 p-2.5 rounded-xl transition-all flex flex-col gap-2"
+                >
+                  {item.image ? (
+                    <img
+                      src={`${item.image}/low.webp`}
+                      alt={item.name}
+                      className="w-full h-32 object-contain rounded-lg bg-slate-900/60"
+                    />
+                  ) : (
+                    <div className="w-full h-32 rounded-lg bg-slate-900 flex items-center justify-center text-[10px] text-slate-500">
+                      Nessuna foto
+                    </div>
+                  )}
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-semibold text-slate-100 line-clamp-1 group-hover:text-amber-400">
+                      {item.name}
+                    </p>
+                    {item.localId && (
+                      <p className="text-[10px] text-slate-400 font-mono">#{item.localId}</p>
+                    )}
+                  </div>
+                </button>
+              ))}
             </div>
+          )}
+        </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Rarità
-              </label>
-              <input
-                type="text"
-                value={rarity}
-                onChange={(e) => setRarity(e.target.value)}
-                placeholder="Es. SAR, UR, Rare, Comune"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+        {/* Anteprima carta selezionata + salvataggio nel binder */}
+        <div className="bg-slate-900 border border-slate-800 p-5 sm:p-6 rounded-2xl shadow-xl space-y-6">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 bg-slate-950 p-4 rounded-xl border border-slate-800">
+            {cardImage ? (
+              <img
+                src={cardImage}
+                alt={cardName || 'Carta selezionata'}
+                className="w-28 h-40 object-contain rounded-lg shrink-0"
               />
+            ) : (
+              <div className="w-28 h-40 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-[11px] text-slate-500 text-center p-2 shrink-0">
+                Anteprima carta
+              </div>
+            )}
+            <div className="space-y-1.5 text-center sm:text-left">
+              <h2 className="font-bold text-sm text-slate-100">
+                {cardName || 'Nessuna carta selezionata'}
+              </h2>
+              <p className="text-xs text-slate-400">
+                Espansione: <span className="text-slate-200">{setName || '—'}</span>
+              </p>
+              <p className="text-xs text-slate-400">
+                Numero: <span className="text-slate-200 font-mono">{cardNumber || '—'}</span>
+              </p>
+              <span className="inline-block text-[10px] bg-slate-900 border border-slate-800 text-amber-400 px-2.5 py-0.5 rounded-full font-mono mt-1">
+                {rarity || 'Rarità non specificata'}
+              </span>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                URL Immagine Carta (opzionale)
-              </label>
-              <input
-                type="url"
-                value={cardImage}
-                onChange={(e) => setCardImage(e.target.value)}
-                placeholder="https://..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-
+          <form onSubmit={handleSaveToBinder} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Ente Gradazione (PSA, BGS, GRAAD)
+                  Nome Carta *
                 </label>
                 <input
                   type="text"
-                  value={gradeCompany}
-                  onChange={(e) => setGradeCompany(e.target.value)}
-                  placeholder="Es. GRAAD"
+                  required
+                  value={cardName}
+                  onChange={(e) => setCardName(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Voto / Punteggio
+                  Espansione / Set
+                </label>
+                <input
+                  type="text"
+                  value={setName}
+                  onChange={(e) => setSetName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Rarità
+                </label>
+                <input
+                  type="text"
+                  value={rarity}
+                  onChange={(e) => setRarity(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  URL Immagine
+                </label>
+                <input
+                  type="url"
+                  value={cardImage}
+                  onChange={(e) => setCardImage(e.target.value)}
+                  placeholder="https://..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Ente Gradazione
+                </label>
+                <input
+                  type="text"
+                  value={gradeCompany}
+                  onChange={(e) => setGradeCompany(e.target.value)}
+                  placeholder="PSA, BGS, GRAAD"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Voto
                 </label>
                 <input
                   type="number"
                   step="0.5"
                   value={gradeScore}
                   onChange={(e) => setGradeScore(e.target.value)}
-                  placeholder="Es. 10"
+                  placeholder="10"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Prezzo Acquisto (€)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={purchasePrice}
+                  onChange={(e) => setPurchasePrice(e.target.value)}
+                  placeholder="25.00"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Prezzo di Acquisto (€)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={purchasePrice}
-                onChange={(e) => setPurchasePrice(e.target.value)}
-                placeholder="Es. 35.00"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-
             <button
               type="submit"
               disabled={saving}
-              className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-lg disabled:opacity-50 mt-4"
+              className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-lg disabled:opacity-50 mt-2"
             >
-              {saving ? 'Salvataggio in corso...' : 'Salva Carta'}
+              {saving ? 'Salvataggio nel binder...' : 'Salva Carta nel Binder'}
             </button>
           </form>
         </div>
