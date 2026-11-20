@@ -271,9 +271,13 @@ function ProfileContent() {
     }
 
     setSearchingFriends(true);
+    setErrorBanner('');
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
 
-    const builder = supabase.from('profiles').select('id, email, username, avatar_url').neq('id', user.id);
+    const builder = supabase
+      .from('profiles')
+      .select('id, email, username, avatar_url')
+      .neq('id', user.id);
 
     const { data, error } = isUuid
       ? await builder.eq('id', trimmed).limit(10)
@@ -281,9 +285,33 @@ function ProfileContent() {
 
     setSearchingFriends(false);
 
-    if (!error && data) {
-      setSearchResults(data);
+    if (error) {
+      setErrorBanner(`Errore ricerca utenti: ${error.message}`);
+      return;
     }
+
+    setSearchResults(data || []);
+  };
+
+  const handleLoadAllUsers = async () => {
+    if (!user) return;
+    setSearchingFriends(true);
+    setErrorBanner('');
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, email, username, avatar_url')
+      .neq('id', user.id)
+      .limit(50);
+
+    setSearchingFriends(false);
+
+    if (error) {
+      setErrorBanner(`Errore caricamento utenti: ${error.message}`);
+      return;
+    }
+
+    setSearchResults(data || []);
   };
 
   const handleManualAddFriend = async (targetUserId: string) => {
@@ -643,7 +671,17 @@ function ProfileContent() {
 
         {/* Aggiunta Manuale Amici */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-          <h2 className="text-sm font-bold text-slate-100">➕ Aggiungi Amico Manualmente</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-slate-100">➕ Aggiungi Amico Manualmente</h2>
+            <button
+              type="button"
+              onClick={handleLoadAllUsers}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px] font-bold rounded-xl border border-slate-700"
+            >
+              📋 Mostra tutti gli iscritti
+            </button>
+          </div>
+
           <input
             type="text"
             placeholder="Cerca per username, email o ID utente..."
