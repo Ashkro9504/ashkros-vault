@@ -1,338 +1,468 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
 
-interface FriendItem {
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
+
+interface ProfileRow {
   id: string;
-  friend_email: string;
-  friend_id: string;
+  email: string | null;
+  username: string | null;
 }
 
-export default function ProfilePage() {
-  const [user, setUser] = useState<any>(null);
-  const [avatarUrl, setAvatarUrl] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [friends, setFriends] = useState<FriendItem[]>([]);
-  const [friendEmailInput, setFriendEmailInput] = useState('');
-  
-  const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
+interface FriendshipRow {
+  id: string;
+  user_id: string;
+  friend_id: string;
+  status: string;
+  sender?: ProfileRow;
+  receiver?: ProfileRow;
+}
+
+interface TradeInviteRow {
+  id: string;
+  sender_id: string;
+  receiver_id: string;
+  status: string;
+  sender?: ProfileRow;
+  receiver?: ProfileRow;
+}
+
+function ProfileContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const addFriendParam = searchParams.get('addFriend');
 
-  useEffect(() => {
-    async function loadProfileData() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-      setUser(user);
+  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const [incomingRequests, setIncomingRequests] = useState<FriendshipRow[]>([]);
+  const [friends, setFriends] = useState<ProfileRow[]>([]);
+  const [tradeNotifications, setTradeNotifications] = useState<TradeInviteRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusBanner, setStatusBanner] = useState('');
+  const [errorBanner, setErrorBanner] = useState('');
 
-      // Carica profilo (avatar)
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-      if (profileData) {
-        setAvatarUrl(profileData.avatar_url || '');
-      }
-
-      // Carica amici
-      const { data: friendshipsData } = await supabase
-        .from('friendships')
-        .select('*')
-        .eq('user_id', user.id);
-
-      if (friendshipsData) {
-        const loadedFriends = await Promise.all(friendshipsData.map(async (f) => {
-          const { data: pData } = await supabase.from('profiles').select('email').eq('id', f.friend_id).single();
-          return {
-            id: f.id,
-            friend_id: f.friend_id,
-            friend_email: pData?.email || 'Utente sconosciuto'
-          };
-        }));
-        setFriends(loadedFriends);
-      }
-
-      setLoading(false);
-    }
-
-    loadProfileData();
-  }, [router]);
-
-  // Funzione per il caricamento diretto del file immagine
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    try {
-      setErrorMsg('');
-      setSuccessMsg('');
-      setUploading(true);
-
-      if (!e.target.files || e.target.files.length === 0) {
-        throw new Error('Devi selezionare un\'immagine da caricare.');
-      }
-
-      const file = e.target.files[0];
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${user.id}-${Math.random()}.${fileExt}`;
-      const filePath = `${fileName}`;
-
-      // 1. Carica il file nel bucket "avatars" di Supabase Storage
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, file);
-
-      if (uploadError) {
-        throw uploadError;
-      }
-
-      // 2. Ottieni l'URL pubblico dell'immagine caricata
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath);
-
-      // 3. Aggiorna la tabella profiles
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({ avatar_url: publicUrl })
-        .eq('id', user.id);
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      setAvatarUrl(publicUrl);
-      setSuccessMsg('Foto profilo caricata e aggiornata con successo!');
-    } catch (error: any) {
-      setErrorMsg(error.message || 'Errore durante il caricamento dell\'immagine.');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleAddFriendByEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    const targetEmail = friendEmailInput.trim().toLowerCase();
-    if (targetEmail === user.email) {
-      setErrorMsg('Non puoi aggiungere te stesso.');
-      return;
-    }
-
-    const { data: targetProfile, error: profileError } = await supabase
+  const loadAll = async (currentUserId: string) => {
+    // 1. Profilo corrente
+    const { data: myProfile } = await supabase
       .from('profiles')
-      .select('id')
-      .eq('email', targetEmail)
+      .select('*')
+      .eq('id', currentUserId)
       .single();
 
-    if (profileError || !targetProfile) {
-      setErrorMsg('Nessun utente trovato con questa email su Ashkro\'s Vault.');
+    if (myProfile) setProfile(myProfile);
+
+    // 2. Se si arriva da scansione QR (?addFriend=ID), invia richiesta amicizia
+    if (addFriendParam && addFriendParam !== currentUserId) {
+      const { data: existing } = await supabase
+        .from('friendships')
+        .select('*')
+        .or(
+          `and(user_id.eq.${currentUserId},friend_id.eq.${addFriendParam}),and(user_id.eq.${addFriendParam},friend_id.eq.${currentUserId})`
+        );
+
+      if (!existing || existing.length === 0) {
+        const { error: reqErr } = await supabase.from('friendships').insert({
+          user_id: currentUserId,
+          friend_id: addFriendParam,
+          status: 'pending',
+        });
+        if (!reqErr) {
+          setStatusBanner('Richiesta di amicizia inviata tramite QR Code!');
+        }
+      } else {
+        setStatusBanner('Collegamento con questo utente già presente.');
+      }
+      router.replace('/profile');
+    }
+
+    // 3. Carica tutte le amicizie
+    const { data: allFriendships } = await supabase
+      .from('friendships')
+      .select('*')
+      .or(`user_id.eq.${currentUserId},friend_id.eq.${currentUserId}`);
+
+    if (allFriendships) {
+      const relatedIds = Array.from(
+        new Set(
+          allFriendships.flatMap((f) => [f.user_id, f.friend_id]).filter((id) => id !== currentUserId)
+        )
+      );
+
+      let profilesMap: Record<string, ProfileRow> = {};
+      if (relatedIds.length > 0) {
+        const { data: profList } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', relatedIds);
+
+        if (profList) {
+          profilesMap = Object.fromEntries(profList.map((p) => [p.id, p]));
+        }
+      }
+
+      const pendingIn = allFriendships
+        .filter((f) => f.friend_id === currentUserId && f.status === 'pending')
+        .map((f) => ({ ...f, sender: profilesMap[f.user_id] }));
+
+      const acceptedFriends = allFriendships
+        .filter((f) => f.status === 'accepted')
+        .map((f) => {
+          const otherId = f.user_id === currentUserId ? f.friend_id : f.user_id;
+          return profilesMap[otherId];
+        })
+        .filter(Boolean);
+
+      setIncomingRequests(pendingIn);
+      setFriends(acceptedFriends);
+    }
+
+    // 4. Carica notifiche e stanze scambio attive
+    const { data: activeTrades } = await supabase
+      .from('trades')
+      .select('*')
+      .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`)
+      .in('status', ['invite_pending', 'room_open', 'offer_sent', 'counter_offer'])
+      .order('updated_at', { ascending: false });
+
+    if (activeTrades) {
+      const tradeUserIds = Array.from(
+        new Set(activeTrades.flatMap((t) => [t.sender_id, t.receiver_id]))
+      );
+      let tradeProfilesMap: Record<string, ProfileRow> = {};
+      if (tradeUserIds.length > 0) {
+        const { data: tProf } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', tradeUserIds);
+        if (tProf) {
+          tradeProfilesMap = Object.fromEntries(tProf.map((p) => [p.id, p]));
+        }
+      }
+
+      setTradeNotifications(
+        activeTrades.map((t) => ({
+          ...t,
+          sender: tradeProfilesMap[t.sender_id],
+          receiver: tradeProfilesMap[t.receiver_id],
+        }))
+      );
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    async function init() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) {
+        router.replace('/login');
+        return;
+      }
+
+      setUser(session.user);
+      await loadAll(session.user.id);
+    }
+    init();
+  }, [router]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
+
+  const handleAcceptFriend = async (friendshipId: string) => {
+    setErrorBanner('');
+    const { error } = await supabase
+      .from('friendships')
+      .update({ status: 'accepted' })
+      .eq('id', friendshipId);
+
+    if (error) {
+      setErrorBanner(error.message);
+      return;
+    }
+    setStatusBanner('Amicizia accettata! Ora potete avviare uno scambio.');
+    if (user) await loadAll(user.id);
+  };
+
+  const handleSendTradeInvite = async (friendId: string) => {
+    if (!user) return;
+    setErrorBanner('');
+    setStatusBanner('');
+
+    const { data: createdTrade, error } = await supabase
+      .from('trades')
+      .insert({
+        sender_id: user.id,
+        receiver_id: friendId,
+        status: 'invite_pending',
+        last_updated_by: user.id,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      setErrorBanner(`Errore invio proposta di scambio: ${error.message}`);
       return;
     }
 
-    const { error: insertError } = await supabase.from('friendships').insert([
-      { user_id: user.id, friend_id: targetProfile.id }
-    ]);
-
-    if (insertError) {
-      setErrorMsg('Questo utente è già nei tuoi amici o c\'è stato un errore.');
-    } else {
-      setSuccessMsg(`Collezionista ${targetEmail} aggiunto con successo!`);
-      setFriendEmailInput('');
-      window.location.reload();
+    setStatusBanner('Notifica "Proposta di scambio" inviata! In attesa che accetti.');
+    if (createdTrade) {
+      await loadAll(user.id);
     }
   };
 
-  const handleRemoveFriend = async (friendshipId: string) => {
-    if (!confirm('Vuoi rimuovere questo amico dal tuo network?')) return;
+  const handleAcceptTradeInvite = async (tradeId: string) => {
+    setErrorBanner('');
+    const { error } = await supabase
+      .from('trades')
+      .update({ status: 'room_open', updated_at: new Date().toISOString() })
+      .eq('id', tradeId);
 
-    const { error } = await supabase.from('friendships').delete().eq('id', friendshipId);
-    if (!error) {
-      setFriends(friends.filter(f => f.id !== friendshipId));
-      setSuccessMsg('Amico rimosso.');
+    if (error) {
+      setErrorBanner(error.message);
+      return;
     }
+    router.push(`/trades/${tradeId}`);
+  };
+
+  const handleRejectTradeInvite = async (tradeId: string) => {
+    await supabase
+      .from('trades')
+      .update({ status: 'rejected', updated_at: new Date().toISOString() })
+      .eq('id', tradeId);
+
+    if (user) await loadAll(user.id);
   };
 
   if (loading) {
-    return <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">Caricamento profilo...</div>;
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+        Caricamento Profilo...
+      </div>
+    );
   }
 
-  const binderUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/binder/${user.id}`;
-  const inviteUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/login?ref=${user.id}`;
-
-  const handleCopyInvite = () => {
-    navigator.clipboard.writeText(inviteUrl);
-    setSuccessMsg('Link referral copiato negli appunti!');
-    setTimeout(() => setSuccessMsg(''), 3000);
-  };
-
-  const handleNativeShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: "Ashkro's Vault",
-          text: 'Unisciti a me su Ashkro\'s Vault per gestire la nostra collezione Pokémon phygital!',
-          url: inviteUrl,
-        });
-      } catch (err) {
-        // Utente ha annullato la condivisione
-      }
-    } else {
-      handleCopyInvite();
-    }
-  };
+  const profileQrUrl =
+    typeof window !== 'undefined' && user
+      ? `${window.location.origin}/profile?addFriend=${user.id}`
+      : '';
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12 pb-24">
-      <div className="max-w-4xl mx-auto space-y-8">
-        
-        {/* Header */}
-        <div className="flex justify-between items-center bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
+      <div className="max-w-4xl mx-auto space-y-6">
+        {/* Header Profilo con Logout */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
           <div>
-            <h1 className="text-xl font-bold text-amber-400">👤 Profilo Collezionista</h1>
-            <p className="text-xs text-slate-400 mt-1">Gestisci la tua identità phygital, il tuo QR code e il network di amici.</p>
-          </div>
-          <a href="/binder" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700">
-            ← Torna al Binder
-          </a>
-        </div>
-
-        {errorMsg && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-3 rounded-xl">{errorMsg}</div>}
-        {successMsg && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs p-3 rounded-xl">{successMsg}</div>}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          
-          {/* Sezione 1: Avatar e Upload Immagine */}
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-            <h2 className="text-sm font-bold text-slate-200">Personalizzazione Account</h2>
-            
-            <div className="flex items-center gap-4 py-2">
-              <div className="w-16 h-16 rounded-full bg-slate-950 border border-amber-500/40 flex items-center justify-center overflow-hidden flex-shrink-0">
-                {avatarUrl ? (
-                  <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-amber-400 font-bold text-xl">🛡️</span>
-                )}
-              </div>
-              <div className="overflow-hidden">
-                <p className="text-xs text-slate-400">Email registrata</p>
-                <p className="text-sm font-bold text-slate-100 truncate">{user.email}</p>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2">
-              <label className="block text-xs font-medium text-slate-300">Carica nuova foto profilo (PC o Smartphone)</label>
-              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-700 hover:border-amber-500 bg-slate-950 rounded-xl p-4 cursor-pointer transition-all">
-                <span className="text-xs text-slate-300 font-semibold">
-                  {uploading ? 'Caricamento in corso...' : '📁 Scegli file o scatta foto'}
-                </span>
-                <span className="text-[10px] text-slate-500 mt-1">PNG, JPG supportati</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                  className="hidden"
-                />
-              </label>
-            </div>
+            <h1 className="text-xl font-bold text-amber-400">
+              👤 {profile?.username || user?.email?.split('@')[0] || 'Collezionista'}
+            </h1>
+            <p className="text-xs text-slate-400 mt-1">{user?.email}</p>
           </div>
 
-          {/* Sezione 2: QR Code del Binder Personale */}
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col items-center justify-center text-center space-y-3">
-            <h2 className="text-sm font-bold text-slate-200">QR Code del tuo Binder Pubblico</h2>
-            <p className="text-xs text-slate-400">Scansiona o condividi questo codice per mostrare la tua collezione in sola lettura.</p>
-            
-            <div className="bg-white p-3 rounded-2xl shadow-md my-2">
-              <QRCodeSVG value={binderUrl} size={110} />
-            </div>
-
-            <a href={binderUrl} target="_blank" className="text-xs text-amber-400 underline hover:text-amber-300">
-              Apri il link pubblico ↗
+          <div className="flex flex-wrap items-center gap-2.5">
+            <a
+              href="/binder"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
+            >
+              🛡️ Il mio Binder
             </a>
-          </div>
-
-        </div>
-
-        {/* Sezione 3: Gestione Amici tramite Email */}
-        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-          <h2 className="text-sm font-bold text-slate-200">🤝 Network Amici</h2>
-          <p className="text-xs text-slate-400">Aggiungi altri collezionisti inserendo la loro email registrata su Ashkro's Vault.</p>
-
-          <form onSubmit={handleAddFriendByEmail} className="flex gap-3">
-            <input
-              type="email"
-              value={friendEmailInput}
-              onChange={(e) => setFriendEmailInput(e.target.value)}
-              placeholder="emailpsa@collezionista.com"
-              required
-              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-            />
-            <button type="submit" className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-lg">
-              Aggiungi Amico
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="px-4 py-2 bg-red-500/15 hover:bg-red-500/25 text-red-400 text-xs font-bold rounded-xl border border-red-500/40 transition-all"
+            >
+              🚪 Logout
             </button>
-          </form>
-
-          <div className="space-y-2 pt-2">
-            {friends.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-2">Nessun amico collegato al momento.</p>
-            ) : (
-              friends.map((f) => (
-                <div key={f.id} className="flex justify-between items-center p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-xs font-semibold text-slate-200">📧 {f.friend_email}</span>
-                  <div className="flex gap-2">
-                    <a href={`/binder/${f.friend_id}`} className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-xs font-semibold rounded-lg border border-amber-500/30">
-                      Vedi Binder
-                    </a>
-                    <button onClick={() => handleRemoveFriend(f.id)} className="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold rounded-lg border border-red-500/30">
-                      Rimuovi
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
           </div>
         </div>
 
-        {/* Sezione 4: Sistema di Referral (Invita un amico) */}
-        <div className="bg-gradient-to-r from-amber-500/10 via-slate-900 to-slate-900 border border-amber-500/30 p-6 rounded-2xl shadow-xl space-y-3">
-          <h2 className="text-sm font-bold text-amber-400">🎁 Invita un Amico & Ottieni Bonus</h2>
-          <p className="text-xs text-slate-300">
-            Il collezionismo è condivisione. Condividi il tuo link referral esclusivo: quando un nuovo utente si registra su Ashkro's Vault tramite il tuo invito, sbloccherete entrambi vantaggi esclusivi.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
-            <input
-              type="text"
-              readOnly
-              value={inviteUrl}
-              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-400 select-all"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={handleCopyInvite}
-                className="flex-1 sm:flex-none px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs border border-slate-700"
-              >
-                Copia Link
-              </button>
-              <button
-                onClick={handleNativeShare}
-                className="flex-1 sm:flex-none px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-lg"
-              >
-                📤 Condividi...
-              </button>
+        {statusBanner && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl">
+            {statusBanner}
+          </div>
+        )}
+
+        {errorBanner && (
+          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs p-4 rounded-xl">
+            {errorBanner}
+          </div>
+        )}
+
+        {/* QR Code del Profilo (Punto 1) */}
+        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-6">
+          <div className="bg-white p-3 rounded-2xl shadow-md shrink-0">
+            {profileQrUrl && <QRCodeSVG value={profileQrUrl} size={132} />}
+          </div>
+          <div className="space-y-2 text-center sm:text-left">
+            <h2 className="text-sm font-bold text-slate-100">
+              📲 Il tuo QR Code Profilo (Aggiungi Amico)
+            </h2>
+            <p className="text-xs text-slate-400">
+              Fai scansionare questo QR code a un altro utente di Ashkro's Vault per ricevere
+              la richiesta di amicizia e aprire la Stanza Scambi.
+            </p>
+            <p className="text-[11px] font-mono text-amber-400 break-all">{profileQrUrl}</p>
+          </div>
+        </div>
+
+        {/* Notifiche Proposta di Scambio (Punto 3) */}
+        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
+          <h2 className="text-sm font-bold text-amber-400">
+            🔔 Notifiche & Stanze Scambio ({tradeNotifications.length})
+          </h2>
+
+          {tradeNotifications.length === 0 ? (
+            <p className="text-xs text-slate-400">Nessuna proposta di scambio attiva al momento.</p>
+          ) : (
+            <div className="space-y-3">
+              {tradeNotifications.map((t) => {
+                const isReceiver = t.receiver_id === user?.id;
+                const otherName = isReceiver
+                  ? t.sender?.username || t.sender?.email || 'Utente'
+                  : t.receiver?.username || t.receiver?.email || 'Utente';
+
+                return (
+                  <div
+                    key={t.id}
+                    className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div>
+                      <p className="text-xs font-bold text-slate-100">
+                        {t.status === 'invite_pending' && isReceiver
+                          ? `📩 Proposta di scambio da ${otherName}`
+                          : `🤝 Stanza scambio con ${otherName}`}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Stato: <span className="text-amber-400 font-mono">{t.status}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {t.status === 'invite_pending' && isReceiver ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptTradeInvite(t.id)}
+                            className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-xl"
+                          >
+                            Accetta ed entra nella Stanza
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRejectTradeInvite(t.id)}
+                            className="px-3.5 py-2 bg-red-500/15 text-red-400 text-xs font-semibold rounded-xl border border-red-500/30"
+                          >
+                            Rifiuta
+                          </button>
+                        </>
+                      ) : (
+                        <a
+                          href={`/trades/${t.id}`}
+                          className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl"
+                        >
+                          Entra nella Stanza →
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Richieste di Amicizia in entrata (Punto 2) */}
+        {incomingRequests.length > 0 && (
+          <div className="bg-slate-900 border border-amber-500/40 p-6 rounded-2xl shadow-xl space-y-4">
+            <h2 className="text-sm font-bold text-amber-400">
+              👋 Richieste di Amicizia in attesa ({incomingRequests.length})
+            </h2>
+            <div className="space-y-3">
+              {incomingRequests.map((req) => (
+                <div
+                  key={req.id}
+                  className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-slate-100">
+                      {req.sender?.username || req.sender?.email || req.user_id}
+                    </p>
+                    <p className="text-[11px] text-slate-400">Ha scansionato il tuo QR code</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAcceptFriend(req.id)}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-xl"
+                  >
+                    Accetta Amicizia
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        )}
 
+        {/* Lista Amici + Avvio Proposta di Scambio */}
+        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
+          <h2 className="text-sm font-bold text-slate-100">
+            🤝 Lista Amici ({friends.length})
+          </h2>
+
+          {friends.length === 0 ? (
+            <p className="text-xs text-slate-400">
+              Nessun amico ancora. Fai scansionare il tuo QR code qui sopra per aggiungerne uno.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {friends.map((friend) => (
+                <div
+                  key={friend.id}
+                  className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-slate-100">
+                      {friend.username || friend.email}
+                    </p>
+                    <p className="text-[11px] text-slate-400">{friend.email}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSendTradeInvite(friend.id)}
+                    className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl shrink-0"
+                  >
+                    🔄 Proponi Scambio
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+export default function ProfilePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+          Caricamento...
+        </div>
+      }
+    >
+      <ProfileContent />
+    </Suspense>
   );
 }
