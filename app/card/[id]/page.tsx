@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useParams, useRouter } from 'next/navigation';
 
@@ -40,7 +40,7 @@ interface PassportCard {
   created_at: string;
 }
 
-export default function CardPassportPage() {
+function CardPassportContent() {
   const params = useParams();
   const router = useRouter();
   const rawId = params?.id as string;
@@ -65,7 +65,6 @@ export default function CardPassportPage() {
       setLoading(true);
       setErrorMsg('');
 
-      // Cerca prima per public_qr_code_id, poi per id
       let foundCard: PassportCard | null = null;
 
       const { data: byQr } = await supabase
@@ -103,7 +102,6 @@ export default function CardPassportPage() {
 
       setCard(foundCard);
 
-      // Recupera nomi/email dai profili per proprietario attuale e originale
       const profileIds = Array.from(
         new Set(
           [foundCard.user_id, foundCard.original_owner_id].filter((id): id is string => Boolean(id))
@@ -180,7 +178,7 @@ export default function CardPassportPage() {
         <div className="flex flex-wrap justify-between items-center gap-3 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
           <div>
             <h1 className="text-lg font-bold text-amber-400">
-              🪪 Passaporto Digitale Carta — Ashkro's Vault
+              🪪 Passaporto Digitale Carta — Ashkro&apos;s Vault
             </h1>
             <p className="text-xs text-slate-400 font-mono mt-0.5">
               ID Passaporto: {card.public_qr_code_id || card.id}
@@ -244,7 +242,6 @@ export default function CardPassportPage() {
               </div>
             </div>
 
-            {/* Storico passaggi di mano */}
             <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2.5">
               <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider">
                 📜 Storico Provenienza ({history.length} {history.length === 1 ? 'scambio' : 'scambi'})
@@ -284,5 +281,19 @@ export default function CardPassportPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CardPassportPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+          Caricamento Passaporto Digitale...
+        </div>
+      }
+    >
+      <CardPassportContent />
+    </Suspense>
   );
 }
