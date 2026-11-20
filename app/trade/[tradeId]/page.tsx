@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useParams, useRouter } from 'next/navigation';
 
@@ -32,7 +32,7 @@ interface TradeData {
   status: string;
 }
 
-export default function TradeRoomPage() {
+function TradeRoomContent() {
   const params = useParams();
   const router = useRouter();
   const tradeId = params?.tradeId as string;
@@ -191,8 +191,7 @@ export default function TradeRoomPage() {
     (trade.status === 'offer_sent' || trade.status === 'counter_offer') &&
     trade.last_updated_by !== currentUserId;
 
-  const canEditSelection =
-    trade.status === 'room_open' || counterMode;
+  const canEditSelection = trade.status === 'room_open' || counterMode;
 
   const renderCardPreview = (card: TradeCard | undefined, label: string) => {
     const img = card?.image_url || card?.card_image || '';
@@ -227,10 +226,11 @@ export default function TradeRoomPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
       <div className="max-w-5xl mx-auto space-y-6">
-        {/* Header Stanza Scambi */}
         <div className="flex flex-wrap justify-between items-center gap-3 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
           <div>
-            <h1 className="text-lg font-bold text-amber-400">🔄 Stanza Scambi — Ashkro's Vault</h1>
+            <h1 className="text-lg font-bold text-amber-400">
+              🔄 Stanza Scambi — Ashkro's Vault
+            </h1>
             <p className="text-xs text-slate-400 mt-0.5">
               Stato attuale: <span className="text-amber-400 font-mono">{trade.status}</span>
             </p>
@@ -264,18 +264,14 @@ export default function TradeRoomPage() {
           </div>
         )}
 
-        {/* Confronto visivo delle 2 carte proposte (Punto 4) */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-5">
-          <h2 className="text-sm font-bold text-slate-100 text-center">
-            Proposta di Scambio
-          </h2>
+          <h2 className="text-sm font-bold text-slate-100 text-center">Proposta di Scambio</h2>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-center">
             {renderCardPreview(proposedSenderCard, 'Carta offerta da Utente A')}
             {renderCardPreview(proposedReceiverCard, 'Carta richiesta a Utente B')}
           </div>
 
-          {/* Azioni di conferma / rifiuto / contro-offerta (Punto 5) */}
           {trade.status === 'completed' && (
             <div className="text-center pt-2">
               <a
@@ -334,10 +330,8 @@ export default function TradeRoomPage() {
           )}
         </div>
 
-        {/* Selezione carte dai rispettivi Binder */}
         {canEditSelection && trade.status !== 'completed' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Binder Utente A */}
             <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
               <h3 className="text-xs font-bold text-amber-400 uppercase">
                 Binder Utente A (seleziona 1 carta)
@@ -372,7 +366,6 @@ export default function TradeRoomPage() {
               </div>
             </div>
 
-            {/* Binder Utente B */}
             <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
               <h3 className="text-xs font-bold text-amber-400 uppercase">
                 Binder Utente B (seleziona 1 carta)
@@ -410,5 +403,19 @@ export default function TradeRoomPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function TradeRoomPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+          Apertura Stanza Scambi...
+        </div>
+      }
+    >
+      <TradeRoomContent />
+    </Suspense>
   );
 }

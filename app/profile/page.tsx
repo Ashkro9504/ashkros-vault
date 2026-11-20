@@ -49,7 +49,6 @@ function ProfileContent() {
   const [errorBanner, setErrorBanner] = useState('');
 
   const loadAll = async (currentUserId: string) => {
-    // 1. Profilo corrente
     const { data: myProfile } = await supabase
       .from('profiles')
       .select('*')
@@ -58,7 +57,6 @@ function ProfileContent() {
 
     if (myProfile) setProfile(myProfile);
 
-    // 2. Se si arriva da scansione QR (?addFriend=ID), invia richiesta amicizia
     if (addFriendParam && addFriendParam !== currentUserId) {
       const { data: existing } = await supabase
         .from('friendships')
@@ -82,7 +80,6 @@ function ProfileContent() {
       router.replace('/profile');
     }
 
-    // 3. Carica tutte le amicizie
     const { data: allFriendships } = await supabase
       .from('friendships')
       .select('*')
@@ -123,7 +120,6 @@ function ProfileContent() {
       setFriends(acceptedFriends);
     }
 
-    // 4. Carica notifiche e stanze scambio attive
     const { data: activeTrades } = await supabase
       .from('trades')
       .select('*')
@@ -233,7 +229,7 @@ function ProfileContent() {
       setErrorBanner(error.message);
       return;
     }
-    router.push(`/trades/${tradeId}`);
+    router.push(`/trade/${tradeId}`);
   };
 
   const handleRejectTradeInvite = async (tradeId: string) => {
@@ -261,7 +257,6 @@ function ProfileContent() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
       <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header Profilo con Logout */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
           <div>
             <h1 className="text-xl font-bold text-amber-400">
@@ -299,7 +294,6 @@ function ProfileContent() {
           </div>
         )}
 
-        {/* QR Code del Profilo (Punto 1) */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-6">
           <div className="bg-white p-3 rounded-2xl shadow-md shrink-0">
             {profileQrUrl && <QRCodeSVG value={profileQrUrl} size={132} />}
@@ -316,7 +310,6 @@ function ProfileContent() {
           </div>
         </div>
 
-        {/* Notifiche Proposta di Scambio (Punto 3) */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
           <h2 className="text-sm font-bold text-amber-400">
             🔔 Notifiche & Stanze Scambio ({tradeNotifications.length})
@@ -368,7 +361,7 @@ function ProfileContent() {
                         </>
                       ) : (
                         <a
-                          href={`/trades/${t.id}`}
+                          href={`/trade/${t.id}`}
                           className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl"
                         >
                           Entra nella Stanza →
@@ -382,7 +375,6 @@ function ProfileContent() {
           )}
         </div>
 
-        {/* Richieste di Amicizia in entrata (Punto 2) */}
         {incomingRequests.length > 0 && (
           <div className="bg-slate-900 border border-amber-500/40 p-6 rounded-2xl shadow-xl space-y-4">
             <h2 className="text-sm font-bold text-amber-400">
@@ -413,7 +405,6 @@ function ProfileContent() {
           </div>
         )}
 
-        {/* Lista Amici + Avvio Proposta di Scambio */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
           <h2 className="text-sm font-bold text-slate-100">
             🤝 Lista Amici ({friends.length})
