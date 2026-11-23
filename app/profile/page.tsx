@@ -13,7 +13,7 @@ const supabase = createClient(
 interface ProfileRow {
   id: string;
   email: string | null;
-  username: string | null;
+  username?: string | null;
   avatar_url?: string | null;
 }
 
@@ -35,6 +35,11 @@ interface TradeInviteRow {
   receiver?: ProfileRow;
 }
 
+function getDisplayName(p?: ProfileRow | null, fallback = 'Utente') {
+  if (!p) return fallback;
+  return p.username || (p.email ? p.email.split('@')[0] : fallback);
+}
+
 function ProfileContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -47,16 +52,13 @@ function ProfileContent() {
   const [allFriendshipEdges, setAllFriendshipEdges] = useState<FriendshipRow[]>([]);
   const [tradeNotifications, setTradeNotifications] = useState<TradeInviteRow[]>([]);
 
-  // Foto profilo
   const [avatarInputUrl, setAvatarInputUrl] = useState('');
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
-  // Aggiunta manuale amici
   const [friendSearchQuery, setFriendSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ProfileRow[]>([]);
   const [searchingFriends, setSearchingFriends] = useState(false);
 
-  // Link invito sito
   const [copiedInvite, setCopiedInvite] = useState(false);
 
   const [loading, setLoading] = useState(true);
@@ -68,7 +70,7 @@ function ProfileContent() {
       .from('profiles')
       .select('*')
       .eq('id', currentUserId)
-      .single();
+      .maybeSingle();
 
     if (myProfile) {
       setProfile(myProfile);
@@ -196,7 +198,6 @@ function ProfileContent() {
     router.push('/login');
   };
 
-  // --- MODIFICA FOTO PROFILO ---
   const handleAvatarFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
@@ -261,7 +262,6 @@ function ProfileContent() {
     await loadAll(user.id);
   };
 
-  // --- RICERCA E AGGIUNTA MANUALE AMICI ---
   const handleSearchUsers = async (queryText: string) => {
     setFriendSearchQuery(queryText);
     const trimmed = queryText.trim();
@@ -274,14 +274,14 @@ function ProfileContent() {
     setErrorBanner('');
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
 
-    const builder = supabase
-      .from('profiles')
-      .select('id, email, username, avatar_url')
-      .neq('id', user.id);
-
     const { data, error } = isUuid
-      ? await builder.eq('id', trimmed).limit(10)
-      : await builder.or(`email.ilike.%${trimmed}%,username.ilike.%${trimmed}%`).limit(10);
+      ? await supabase.from('profiles').select('*').neq('id', user.id).eq('id', trimmed).limit(10)
+      : await supabase
+          .from('profiles')
+          .select('*')
+          .neq('id', user.id)
+          .ilike('email', `%${trimmed}%`)
+          .limit(10);
 
     setSearchingFriends(false);
 
@@ -300,7 +300,7 @@ function ProfileContent() {
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, email, username, avatar_url')
+      .select('*')
       .neq('id', user.id)
       .limit(50);
 
@@ -441,7 +441,6 @@ function ProfileContent() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
       <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header Profilo con Foto Avatar + Logout */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
           <div className="flex items-center gap-4">
             {currentAvatar ? (
@@ -452,12 +451,12 @@ function ProfileContent() {
               />
             ) : (
               <div className="w-16 h-16 rounded-full bg-slate-950 border-2 border-slate-700 flex items-center justify-center text-xl font-bold text-amber-400 shrink-0">
-                {(profile?.username || user?.email || 'U').charAt(0).toUpperCase()}
+                {getDisplayName(profile, user?.email || 'U').charAt(0).toUpperCase()}
               </div>
             )}
             <div>
               <h1 className="text-xl font-bold text-amber-400">
-                👤 {profile?.username || user?.email?.split('@')[0] || 'Collezionista'}
+                👤 {getDisplayName(profile, user?.email?.split('@')[0] || 'Collezionista')}
               </h1>
               <p className="text-xs text-slate-400 mt-1">{user?.email}</p>
             </div>
@@ -492,7 +491,6 @@ function ProfileContent() {
           </div>
         )}
 
-        {/* Modifica Foto Profilo */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
           <h2 className="text-sm font-bold text-slate-100">🖼️ Modifica Foto Profilo</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
@@ -529,7 +527,6 @@ function ProfileContent() {
           </div>
         </div>
 
-        {/* Link Invito al Sito (Beta Tester / Utenti) */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-3">
           <h2 className="text-sm font-bold text-amber-400">
             🔗 Link di Invito al Sito (per Beta Tester)
@@ -555,7 +552,6 @@ function ProfileContent() {
           </div>
         </div>
 
-        {/* QR Code Profilo */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-6">
           <div className="bg-white p-3 rounded-2xl shadow-md shrink-0">
             {profileQrUrl && <QRCodeSVG value={profileQrUrl} size={132} />}
@@ -572,7 +568,6 @@ function ProfileContent() {
           </div>
         </div>
 
-        {/* Notifiche Proposta di Scambio */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
           <h2 className="text-sm font-bold text-amber-400">
             🔔 Notifiche & Stanze Scambio ({tradeNotifications.length})
@@ -585,8 +580,8 @@ function ProfileContent() {
               {tradeNotifications.map((t) => {
                 const isReceiver = t.receiver_id === user?.id;
                 const otherName = isReceiver
-                  ? t.sender?.username || t.sender?.email || 'Utente'
-                  : t.receiver?.username || t.receiver?.email || 'Utente';
+                  ? getDisplayName(t.sender, 'Utente')
+                  : getDisplayName(t.receiver, 'Utente');
 
                 return (
                   <div
@@ -638,7 +633,6 @@ function ProfileContent() {
           )}
         </div>
 
-        {/* Richieste di Amicizia in entrata */}
         {incomingRequests.length > 0 && (
           <div className="bg-slate-900 border border-amber-500/40 p-6 rounded-2xl shadow-xl space-y-4">
             <h2 className="text-sm font-bold text-amber-400">
@@ -652,7 +646,7 @@ function ProfileContent() {
                 >
                   <div>
                     <p className="text-xs font-bold text-slate-100">
-                      {req.sender?.username || req.sender?.email || req.user_id}
+                      {getDisplayName(req.sender, req.user_id)}
                     </p>
                     <p className="text-[11px] text-slate-400">Richiesta di amicizia ricevuta</p>
                   </div>
@@ -669,7 +663,6 @@ function ProfileContent() {
           </div>
         )}
 
-        {/* Aggiunta Manuale Amici */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-bold text-slate-100">➕ Aggiungi Amico Manualmente</h2>
@@ -684,7 +677,7 @@ function ProfileContent() {
 
           <input
             type="text"
-            placeholder="Cerca per username, email o ID utente..."
+            placeholder="Cerca per email o ID utente..."
             value={friendSearchQuery}
             onChange={(e) => handleSearchUsers(e.target.value)}
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
@@ -714,18 +707,16 @@ function ProfileContent() {
                       {u.avatar_url ? (
                         <img
                           src={u.avatar_url}
-                          alt={u.username || 'Utente'}
+                          alt={getDisplayName(u)}
                           className="w-9 h-9 rounded-full object-cover border border-slate-700"
                         />
                       ) : (
                         <div className="w-9 h-9 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs font-bold text-amber-400">
-                          {(u.username || u.email || '?').charAt(0).toUpperCase()}
+                          {getDisplayName(u).charAt(0).toUpperCase()}
                         </div>
                       )}
                       <div>
-                        <p className="text-xs font-bold text-slate-100">
-                          {u.username || u.email}
-                        </p>
+                        <p className="text-xs font-bold text-slate-100">{getDisplayName(u)}</p>
                         <p className="text-[11px] text-slate-400">{u.email}</p>
                       </div>
                     </div>
@@ -754,7 +745,6 @@ function ProfileContent() {
           )}
         </div>
 
-        {/* Lista Amici + Avvio Proposta di Scambio */}
         <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
           <h2 className="text-sm font-bold text-slate-100">🤝 Lista Amici ({friends.length})</h2>
 
@@ -773,17 +763,17 @@ function ProfileContent() {
                     {friend.avatar_url ? (
                       <img
                         src={friend.avatar_url}
-                        alt={friend.username || 'Amico'}
+                        alt={getDisplayName(friend)}
                         className="w-10 h-10 rounded-full object-cover border border-slate-700 shrink-0"
                       />
                     ) : (
                       <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs font-bold text-amber-400 shrink-0">
-                        {(friend.username || friend.email || '?').charAt(0).toUpperCase()}
+                        {getDisplayName(friend).charAt(0).toUpperCase()}
                       </div>
                     )}
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-slate-100 truncate">
-                        {friend.username || friend.email}
+                        {getDisplayName(friend)}
                       </p>
                       <p className="text-[11px] text-slate-400 truncate">{friend.email}</p>
                     </div>
