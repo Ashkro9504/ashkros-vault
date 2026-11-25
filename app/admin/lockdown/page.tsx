@@ -9,6 +9,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+const ADMIN_EMAIL = 'rayken9597@gmail.com';
+
 interface LockdownRule {
   id: string;
   card_name: string;
@@ -19,6 +21,7 @@ interface LockdownRule {
   reason?: string | null;
   is_active: boolean;
   created_at: string;
+  resolved_at?: string | null;
 }
 
 interface LockdownRequestItem {
@@ -35,7 +38,6 @@ export default function AdminLockdownPage() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Campi form Lock-down carta specifica
   const [cardName, setCardName] = useState('');
   const [setName, setSetName] = useState('');
   const [cardNumber, setCardNumber] = useState('');
@@ -56,7 +58,7 @@ export default function AdminLockdownPage() {
         .from('lockdown_requests')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(20),
+        .limit(30),
     ]);
 
     setRules(rData || []);
@@ -71,6 +73,11 @@ export default function AdminLockdownPage() {
 
       if (!session?.user) {
         router.replace('/login');
+        return;
+      }
+
+      if (session.user.email?.toLowerCase() !== ADMIN_EMAIL) {
+        router.replace('/profile');
         return;
       }
 
@@ -108,7 +115,7 @@ export default function AdminLockdownPage() {
     setSaving(false);
 
     if (error) {
-      setErrorMsg(`Errore attivazione lock-down (verifica permessi admin): ${error.message}`);
+      setErrorMsg(`Errore attivazione lock-down: ${error.message}`);
       return;
     }
 
@@ -138,23 +145,41 @@ export default function AdminLockdownPage() {
     setSaving(false);
 
     if (error) {
-      setErrorMsg(`Errore disattivazione lock-down: ${error.message}`);
+      setErrorMsg(`Errore annullamento lock-down: ${error.message}`);
       return;
     }
 
     setStatusMsg(
-      `Situazione tornata sotto controllo per "${rule.card_name}" (${rule.set_name} #${rule.card_number}): tutto torna normale.`
+      `Lock-down annullato per "${rule.card_name}" (${rule.set_name} #${rule.card_number}): situazione tornata sotto controllo.`
     );
+    await loadLockdowns();
+  };
+
+  const handleCloseRequest = async (requestId: string) => {
+    setSaving(true);
+    const { error } = await supabase
+      .from('lockdown_requests')
+      .update({ status: 'resolved' })
+      .eq('id', requestId);
+    setSaving(false);
+
+    if (error) {
+      setErrorMsg(`Errore aggiornamento segnalazione: ${error.message}`);
+      return;
+    }
     await loadLockdowns();
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
-        Caricamento Pannello Lock-down...
+        Verifica autorizzazioni Admin...
       </div>
     );
   }
+
+  const activeRules = rules.filter((r) => r.is_active);
+  const resolvedRules = rules.filter((r) => !r.is_active);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
@@ -162,17 +187,17 @@ export default function AdminLockdownPage() {
         <div className="flex flex-wrap justify-between items-center gap-3 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
           <div>
             <h1 className="text-lg font-bold text-red-400">
-              🛡️ Controllo Lock-down Carte — Admin
+              🛡️ Pannello Admin Lock-down — Ashkro's Vault
             </h1>
             <p className="text-xs text-slate-400 mt-0.5">
-              Blocca l'inserimento di una carta specifica in caso di furto o smarrimento.
+              Accesso riservato a <span className="text-amber-400 font-mono">{ADMIN_EMAIL}</span>
             </p>
           </div>
           <a
             href="/profile"
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700"
           >
-            ← Profilo
+            ← Torna al Profilo
           </a>
         </div>
 
@@ -188,13 +213,60 @@ export default function AdminLockdownPage() {
           </div>
         )}
 
-        {/* Form attivazione Lock-down */}
+        {/* 1. CARTE ATTUALMENTE IN LOCK-DOWN (BLOCCATE) */}
+        <div className="bg-slate-900 border border-red-500/40 p-6 rounded-2xl shadow-xl space-y-4">
+          <h2 className="text-sm font-bold text-red-400">
+            🔒 Prodotti attualmente in Lock-down ({activeRules.length})
+          </h2>
+
+          {activeRules.length === 0 ? (
+            <p className="text-xs text-slate-400">
+              Nessuna carta è attualmente bloccata in lock-down.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {activeRules.map((r) => (
+                <div
+                  key={r.id}
+                  className="bg-slate-950 border border-red-500/30 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold text-slate-100">{r.card_name}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-500/20 text-red-300 border border-red-500/40">
+                        BLOCCATA
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      Set: <strong>{r.set_name}</strong> • Numero: <strong>#{r.card_number}</strong> • Lingua: <strong>{r.language}</strong>
+                      {r.grade_number ? ` • Gradazione: ${r.grade_number}` : ''}
+                    </p>
+                    {r.reason && (
+                      <p className="text-[11px] text-slate-400">Motivo: {r.reason}</p>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => handleResolveLockdown(r)}
+                    className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-xl shrink-0 disabled:opacity-50"
+                  >
+                    ✅ Annulla Lock-down (Risolto)
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 2. FORM PER METTERE IN LOCK-DOWN UNA CARTA */}
         <form
           onSubmit={handleActivateLockdown}
           className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4"
         >
           <h2 className="text-sm font-bold text-amber-400">
-            🔒 Attiva Lock-down su una carta specifica
+            ➕ Metti in Lock-down una carta specifica
           </h2>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
@@ -275,48 +347,43 @@ export default function AdminLockdownPage() {
           </button>
         </form>
 
-        {/* Elenco Lock-down attivi e storici */}
-        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-          <h2 className="text-sm font-bold text-slate-100">
-            📋 Carte in Lock-down ({rules.length})
+        {/* 3. SEGNALAZIONI RICEVUTE DAGLI UTENTI */}
+        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-3">
+          <h2 className="text-sm font-bold text-amber-400">
+            📩 Segnalazioni ricevute dal tasto Lock-down ({requests.length})
           </h2>
 
-          {rules.length === 0 ? (
-            <p className="text-xs text-slate-400">Nessun lock-down registrato.</p>
+          {requests.length === 0 ? (
+            <p className="text-xs text-slate-400">Nessuna segnalazione ricevuta.</p>
           ) : (
-            <div className="space-y-3">
-              {rules.map((r) => (
+            <div className="space-y-2.5">
+              {requests.map((req) => (
                 <div
-                  key={r.id}
-                  className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  key={req.id}
+                  className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
                 >
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-slate-100">{r.card_name}</span>
+                    <p className="font-bold text-slate-200">
+                      Da: {req.reporter_email || 'Utente'} •{' '}
                       <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                          r.is_active
-                            ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-                            : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                        }`}
+                        className={
+                          req.status === 'open' ? 'text-amber-400 font-mono' : 'text-emerald-400 font-mono'
+                        }
                       >
-                        {r.is_active ? 'LOCK-DOWN ATTIVO' : 'RISOLTO'}
+                        {req.status}
                       </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400">
-                      Set: {r.set_name} • #{r.card_number} • Lingua: {r.language}
-                      {r.grade_number ? ` • Gradazione: ${r.grade_number}` : ''}
                     </p>
+                    <p className="text-slate-400">{req.notes || 'Nessuna nota'}</p>
                   </div>
 
-                  {r.is_active && (
+                  {req.status === 'open' && (
                     <button
                       type="button"
                       disabled={saving}
-                      onClick={() => handleResolveLockdown(r)}
-                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-xl shrink-0"
+                      onClick={() => handleCloseRequest(req.id)}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold rounded-lg border border-slate-700 shrink-0"
                     >
-                      ✅ Situazione tornata sotto controllo
+                      Segna segnalazione gestita
                     </button>
                   )}
                 </div>
@@ -325,23 +392,28 @@ export default function AdminLockdownPage() {
           )}
         </div>
 
-        {/* Segnalazioni ricevute dal tasto Lock-down */}
-        {requests.length > 0 && (
+        {/* 4. STORICO LOCK-DOWN ANNULLATI */}
+        {resolvedRules.length > 0 && (
           <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-3">
-            <h2 className="text-sm font-bold text-amber-400">
-              📩 Segnalazioni ricevute dal tasto Lock-down ({requests.length})
+            <h2 className="text-sm font-bold text-slate-300">
+              🗂️ Storico Lock-down risolti ({resolvedRules.length})
             </h2>
-            {requests.map((req) => (
-              <div
-                key={req.id}
-                className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-xs space-y-1"
-              >
-                <p className="font-bold text-slate-200">
-                  Da: {req.reporter_email || 'Utente'} • Stato: {req.status}
-                </p>
-                <p className="text-slate-400">{req.notes || 'Nessuna nota'}</p>
-              </div>
-            ))}
+            <div className="space-y-2">
+              {resolvedRules.map((r) => (
+                <div
+                  key={r.id}
+                  className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs text-slate-400"
+                >
+                  <span>
+                    <strong className="text-slate-200">{r.card_name}</strong> ({r.set_name} #
+                    {r.card_number} — {r.language})
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                    RISOLTO
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

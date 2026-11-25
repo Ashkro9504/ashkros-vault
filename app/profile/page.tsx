@@ -437,6 +437,7 @@ function ProfileContent() {
     siteInviteUrl && user ? `${siteInviteUrl}/profile?addFriend=${user.id}` : '';
 
   const currentAvatar = profile?.avatar_url || '';
+  const isAdminUser = user?.email?.toLowerCase() === 'rayken9597@gmail.com';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
@@ -463,6 +464,14 @@ function ProfileContent() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {isAdminUser && (
+              <a
+                href="/admin/lockdown"
+                className="px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-300 text-xs font-bold rounded-xl border border-red-500/40 transition-all"
+              >
+                🚨 Pannello Lock-down
+              </a>
+            )}
             <a
               href="/binder"
               className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
