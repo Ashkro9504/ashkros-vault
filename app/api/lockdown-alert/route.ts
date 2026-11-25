@@ -3,7 +3,15 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { reporterEmail, reporterId, cardName, cardId, notes } = body || {};
+    const {
+      type = 'lockdown',
+      reporterEmail,
+      reporterId,
+      cardName,
+      cardId,
+      notes,
+      resolutionNotes,
+    } = body || {};
 
     const adminEmail = process.env.ADMIN_ALERT_EMAIL || 'rayken9597@gmail.com';
     const resendApiKey = process.env.RESEND_API_KEY;
@@ -14,11 +22,33 @@ export async function POST(req: NextRequest) {
         {
           ok: true,
           warning:
-            'Richiesta salvata su Supabase. Configura RESEND_API_KEY e ADMIN_ALERT_EMAIL su Vercel per ricevere anche la mail automatica.',
+            'Aggiornamento salvato su Supabase. Configura RESEND_API_KEY e ADMIN_ALERT_EMAIL su Vercel per ricevere anche la mail automatica.',
         },
         { status: 200 }
       );
     }
+
+    const isResolution = type === 'resolved';
+
+    const subject = isResolution
+      ? `✅ Risoluzione Lock-down segnalata su Ashkro's Vault${cardName ? ` — ${cardName}` : ''}`
+      : `🚨 LOCK-DOWN Richiesto su Ashkro's Vault${cardName ? ` — ${cardName}` : ''}`;
+
+    const html = isResolution
+      ? `
+        <h2>Comunicazione Risoluzione Lock-down</h2>
+        <p><strong>Utente:</strong> ${reporterEmail || 'N/D'} (ID: ${reporterId || 'N/D'})</p>
+        <p><strong>Carta:</strong> ${cardName || 'Non specificata'} (ID: ${cardId || 'N/D'})</p>
+        <p><strong>Messaggio di risoluzione dell'utente:</strong><br/>${resolutionNotes || 'L’utente ha segnalato che il problema è rientrato.'}</p>
+        <p>Controlla il Pannello Lock-down su Ashkro's Vault per disattivare il blocco se confermato.</p>
+      `
+      : `
+        <h2>Segnalazione Lock-down Carta</h2>
+        <p><strong>Utente segnalante:</strong> ${reporterEmail || 'N/D'} (ID: ${reporterId || 'N/D'})</p>
+        <p><strong>Carta collegata:</strong> ${cardName || 'Non specificata'} (ID: ${cardId || 'N/D'})</p>
+        <p><strong>Dettagli inseriti dall'utente:</strong><br/>${notes || 'Nessuna nota aggiuntiva'}</p>
+        <p>Accedi al pannello Lock-down su Ashkro's Vault per attivare il blocco sulla carta specifica.</p>
+      `;
 
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -28,15 +58,9 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         from: fromEmail,
-        to: [adminEmail], // SOLO all'amministratore
-        subject: `🚨 LOCK-DOWN Richiesto su Ashkro's Vault${cardName ? ` — ${cardName}` : ''}`,
-        html: `
-          <h2>Segnalazione Lock-down Carta</h2>
-          <p><strong>Utente segnalante:</strong> ${reporterEmail || 'N/D'} (ID: ${reporterId || 'N/D'})</p>
-          <p><strong>Carta collegata:</strong> ${cardName || 'Non specificata'} (ID: ${cardId || 'N/D'})</p>
-          <p><strong>Dettagli inseriti dall'utente:</strong><br/>${notes || 'Nessuna nota aggiuntiva'}</p>
-          <p>Accedi al pannello Lock-down su Ashkro's Vault per attivare il blocco sulla carta specifica.</p>
-        `,
+        to: [adminEmail],
+        subject,
+        html,
       }),
     });
 

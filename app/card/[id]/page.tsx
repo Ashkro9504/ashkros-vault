@@ -41,6 +41,15 @@ interface PassportCard {
   created_at: string;
 }
 
+interface UserLockdownRequest {
+  id: string;
+  card_id: string | null;
+  notes: string | null;
+  resolution_notes?: string | null;
+  status: string;
+  created_at: string;
+}
+
 function formatOwnerName(
   profile?: { username?: string | null; email?: string | null } | null,
   fallbackId?: string | null
@@ -60,6 +69,7 @@ function CardPassportContent() {
   const [ownerProfiles, setOwnerProfiles] = useState<
     Record<string, { username?: string | null; email?: string | null }>
   >({});
+  const [myRequests, setMyRequests] = useState<UserLockdownRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -68,6 +78,22 @@ function CardPassportContent() {
   const [lockdownNotes, setLockdownNotes] = useState('');
   const [sendingLockdown, setSendingLockdown] = useState(false);
   const [lockdownFeedback, setLockdownFeedback] = useState('');
+
+  // Stato comunicazione risoluzione problema
+  const [resolvingRequestId, setResolvingRequestId] = useState<string | null>(null);
+  const [resolutionMessage, setResolutionMessage] = useState('');
+  const [sendingResolution, setSendingResolution] = useState(false);
+
+  const loadMyRequestsForCard = async (userId: string, cardUuid: string) => {
+    const { data } = await supabase
+      .from('lockdown_requests')
+      .select('id, card_id, notes, resolution_notes, status, created_at')
+      .eq('reporter_user_id', userId)
+      .eq('card_id', cardUuid)
+      .order('created_at', { ascending: false });
+
+    setMyRequests(data || []);
+  };
 
   useEffect(() => {
     let active = true;
@@ -87,9 +113,6 @@ function CardPassportContent() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      if (active && session?.user) {
-        setCurrentUser(session.user);
-      }
 
       let foundCard: PassportCard | null = null;
 
@@ -127,6 +150,11 @@ function CardPassportContent() {
       }
 
       setCard(foundCard);
+
+      if (active && session?.user) {
+        setCurrentUser(session.user);
+        await loadMyRequestsForCard(session.user.id, foundCard.id);
+      }
 
       const firstOwnerId = foundCard.original_owner_id || foundCard.user_id;
       const profileIds = Array.from(
@@ -184,25 +212,110 @@ function CardPassportContent() {
       return;
     }
 
-    // Invia notifica email SOLO all'amministratore tramite API route
-    await fetch('/api/lockdown-alert', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        reporterEmail: currentUser.email,
-        reporterId: currentUser.id,
-        cardName: card.card_name,
-        cardId: card.id,
-        notes: lockdownNotes.trim(),
-      }),
-    }).catch(() => null);
+    try {
+      const alertRes = await fetch('/api/lockdown-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'lockdown',
+          reporterEmail: currentUser.email,
+          reporterId: currentUser.id,
+          cardName: card.card_name,
+          cardId: card.id,
+          notes: lockdownNotes.trim(),
+        }),
+      });
 
-    setSendingLockdown(false);
-    setShowLockdownModal(false);
-    setLockdownNotes('');
-    setLockdownFeedback(
-      "Segnalazione Lock-down inviata all'amministratore. Riceverai conferma appena la carta verrà bloccata a sistema."
-    );
+      const alertJson = await alertRes.json();
+      setSendingLockdown(false);
+
+      if (!alertRes.ok || !alertJson.ok) {
+        setErrorMsg(
+          alertJson.error || 'Segnalazione salvata nel database, ma invio email fallito.'
+        );
+        return;
+      }
+
+      if (alertJson.warning) {
+        setErrorMsg(alertJson.warning);
+        return;
+      }
+
+      setShowLockdownModal(false);
+      setLockdownNotes('');
+      setLockdownFeedback(
+        "Segnalazione Lock-down inviata con successo via email all'amministratore."
+      );
+      await loadMyRequestsForCard(currentUser.id, card.id);
+    } catch (err: any) {
+      setSendingLockdown(false);
+      setErrorMsg(
+        `Segnalazione salvata su Supabase, ma errore chiamata email: ${err?.message || 'rete'}`
+      );
+    }
+  };
+
+  const handleSendResolutionNotice = async (reqItem: UserLockdownRequest) => {
+    if (!card || !currentUser) return;
+
+    setSendingResolution(true);
+    setErrorMsg('');
+    setLockdownFeedback('');
+
+    const cleanResolution =
+      resolutionMessage.trim() ||
+      'L’utente ha comunicato che il problema legato alla carta è stato risolto.';
+
+    const { error: updErr } = await supabase
+      .from('lockdown_requests')
+      .update({
+        resolution_notes: cleanResolution,
+        resolved_at: new Date().toISOString(),
+        status: 'resolution_reported',
+      })
+      .eq('id', reqItem.id)
+      .eq('reporter_user_id', currentUser.id);
+
+    if (updErr) {
+      setSendingResolution(false);
+      setErrorMsg(`Errore invio comunicazione di risoluzione: ${updErr.message}`);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/lockdown-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'resolved',
+          reporterEmail: currentUser.email,
+          reporterId: currentUser.id,
+          cardName: card.card_name,
+          cardId: card.id,
+          resolutionNotes: cleanResolution,
+        }),
+      });
+
+      const resJson = await res.json();
+      setSendingResolution(false);
+
+      if (!res.ok || !resJson.ok) {
+        setErrorMsg(
+          resJson.error || 'Comunicazione salvata, ma invio email all’amministratore fallito.'
+        );
+        return;
+      }
+
+      setResolvingRequestId(null);
+      setResolutionMessage('');
+      setLockdownFeedback(
+        "Comunicazione di risoluzione inviata all'amministratore. Il blocco verrà rimosso appena confermato."
+      );
+      await loadMyRequestsForCard(currentUser.id, card.id);
+    } catch (err: any) {
+      setSendingResolution(false);
+      setErrorMsg(`Errore invio email risoluzione: ${err?.message || 'rete'}`);
+    }
   };
 
   if (loading) {
@@ -311,6 +424,83 @@ function CardPassportContent() {
               >
                 {sendingLockdown ? 'Invio...' : 'Invia Segnalazione Lock-down'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Segnalazioni inviate dall'utente per questa carta + tasto per comunicare la risoluzione */}
+        {myRequests.length > 0 && (
+          <div className="bg-slate-900 border border-amber-500/30 p-5 rounded-2xl shadow-xl space-y-3">
+            <h2 className="text-sm font-bold text-amber-400">
+              📩 Le tue segnalazioni Lock-down su questa carta
+            </h2>
+            <div className="space-y-3">
+              {myRequests.map((reqItem) => {
+                const isOpen = reqItem.status === 'open';
+                const isEditingRes = resolvingRequestId === reqItem.id;
+
+                return (
+                  <div
+                    key={reqItem.id}
+                    className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2.5 text-xs"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] text-amber-300">
+                        Stato: {reqItem.status}
+                      </span>
+                      {isOpen && !isEditingRes && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResolvingRequestId(reqItem.id);
+                            setResolutionMessage('');
+                          }}
+                          className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-xl"
+                        >
+                          ✅ Segnala problema risolto
+                        </button>
+                      )}
+                    </div>
+
+                    <p className="text-slate-300">{reqItem.notes || 'Segnalazione inviata'}</p>
+
+                    {reqItem.resolution_notes && (
+                      <p className="text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg">
+                        <strong>Risoluzione comunicata:</strong> {reqItem.resolution_notes}
+                      </p>
+                    )}
+
+                    {isEditingRes && (
+                      <div className="space-y-2 pt-1">
+                        <textarea
+                          rows={2}
+                          placeholder="Scrivi all'amministratore come si è risolto il problema (es. carta ritrovata)..."
+                          value={resolutionMessage}
+                          onChange={(e) => setResolutionMessage(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-slate-100"
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setResolvingRequestId(null)}
+                            className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded-lg"
+                          >
+                            Annulla
+                          </button>
+                          <button
+                            type="button"
+                            disabled={sendingResolution}
+                            onClick={() => handleSendResolutionNotice(reqItem)}
+                            className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-lg disabled:opacity-50"
+                          >
+                            {sendingResolution ? 'Invio...' : 'Invia comunicazione all’Admin'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
