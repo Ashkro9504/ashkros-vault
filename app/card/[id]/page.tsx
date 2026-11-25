@@ -9,413 +9,418 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
-interface TradeCard {
+interface ProvenanceStep {
+  from_user_id?: string;
+  from_username?: string;
+  to_user_id?: string;
+  to_username?: string;
+  trade_id?: string;
+  traded_at?: string;
+}
+
+interface PassportCard {
   id: string;
   user_id: string;
+  original_owner_id?: string | null;
+  public_qr_code_id?: string | null;
+  game_title?: string | null;
   card_name: string;
   set_name?: string | null;
   card_number?: string | null;
   rarity?: string | null;
-  card_image?: string | null;
+  language?: string | null;
+  condition?: string | null;
   image_url?: string | null;
+  card_image?: string | null;
+  is_graded?: string | null;
+  grade?: string | number | null;
   grade_company?: string | null;
   grade_score?: number | null;
+  grade_number?: string | null;
+  provenance_history?: ProvenanceStep[] | null;
+  created_at: string;
 }
 
-interface TradeData {
-  id: string;
-  sender_id: string;
-  receiver_id: string;
-  sender_card_id: string | null;
-  receiver_card_id: string | null;
-  last_updated_by: string | null;
-  status: string;
+function formatOwnerName(
+  profile?: { username?: string | null; email?: string | null } | null,
+  fallbackId?: string | null
+) {
+  if (profile?.username) return profile.username;
+  if (profile?.email) return profile.email.split('@')[0];
+  return fallbackId || 'Utente non disponibile';
 }
 
-function TradeRoomContent() {
+function CardPassportContent() {
   const params = useParams();
   const router = useRouter();
-  const tradeId = params?.tradeId as string;
+  const rawId = params?.id as string;
 
-  const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [trade, setTrade] = useState<TradeData | null>(null);
-  const [senderCards, setSenderCards] = useState<TradeCard[]>([]);
-  const [receiverCards, setReceiverCards] = useState<TradeCard[]>([]);
-  const [selectedSenderCardId, setSelectedSenderCardId] = useState<string>('');
-  const [selectedReceiverCardId, setSelectedReceiverCardId] = useState<string>('');
-  const [counterMode, setCounterMode] = useState(false);
-
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [card, setCard] = useState<PassportCard | null>(null);
+  const [ownerProfiles, setOwnerProfiles] = useState<
+    Record<string, { username?: string | null; email?: string | null }>
+  >({});
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
 
-  const loadTradeRoom = async (uid: string) => {
-    setErrorMsg('');
-    const { data: tradeRow, error: tradeErr } = await supabase
-      .from('trades')
-      .select('*')
-      .eq('id', tradeId)
-      .single();
-
-    if (tradeErr || !tradeRow) {
-      setErrorMsg('Stanza scambio non trovata o non autorizzata.');
-      setLoading(false);
-      return;
-    }
-
-    setTrade(tradeRow);
-    setSelectedSenderCardId(tradeRow.sender_card_id || '');
-    setSelectedReceiverCardId(tradeRow.receiver_card_id || '');
-
-    const [{ data: sCards }, { data: rCards }] = await Promise.all([
-      supabase.from('user_cards').select('*').eq('user_id', tradeRow.sender_id),
-      supabase.from('user_cards').select('*').eq('user_id', tradeRow.receiver_id),
-    ]);
-
-    setSenderCards(sCards || []);
-    setReceiverCards(rCards || []);
-    setLoading(false);
-  };
+  // Stato tasto Lock-down
+  const [showLockdownModal, setShowLockdownModal] = useState(false);
+  const [lockdownNotes, setLockdownNotes] = useState('');
+  const [sendingLockdown, setSendingLockdown] = useState(false);
+  const [lockdownFeedback, setLockdownFeedback] = useState('');
 
   useEffect(() => {
-    async function init() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+    let active = true;
 
-      if (!session?.user) {
-        router.replace('/login');
+    async function loadCardPassport() {
+      if (!rawId) {
+        if (active) {
+          setErrorMsg('Identificativo carta mancante.');
+          setLoading(false);
+        }
         return;
       }
 
-      setCurrentUserId(session.user.id);
-      if (tradeId) {
-        await loadTradeRoom(session.user.id);
+      setLoading(true);
+      setErrorMsg('');
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (active && session?.user) {
+        setCurrentUser(session.user);
       }
-    }
-    init();
-  }, [router, tradeId]);
 
-  const handleSendOrCounterOffer = async (isCounter: boolean) => {
-    if (!trade || !selectedSenderCardId || !selectedReceiverCardId) {
-      setErrorMsg('Seleziona entrambe le carte (una per ciascun binder) prima di inviare.');
+      let foundCard: PassportCard | null = null;
+
+      const { data: byQr } = await supabase
+        .from('user_cards')
+        .select('*')
+        .eq('public_qr_code_id', rawId)
+        .maybeSingle();
+
+      if (byQr) {
+        foundCard = byQr;
+      } else {
+        const { data: byId, error: byIdErr } = await supabase
+          .from('user_cards')
+          .select('*')
+          .eq('id', rawId)
+          .maybeSingle();
+
+        if (byIdErr) {
+          if (active) {
+            setErrorMsg(`Errore lettura passaporto carta: ${byIdErr.message}`);
+            setLoading(false);
+          }
+          return;
+        }
+        foundCard = byId;
+      }
+
+      if (!active) return;
+
+      if (!foundCard) {
+        setErrorMsg('Carta non trovata.');
+        setLoading(false);
+        return;
+      }
+
+      setCard(foundCard);
+
+      const firstOwnerId = foundCard.original_owner_id || foundCard.user_id;
+      const profileIds = Array.from(
+        new Set([foundCard.user_id, firstOwnerId].filter((id): id is string => Boolean(id)))
+      );
+
+      if (profileIds.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, username, email')
+          .in('id', profileIds);
+
+        if (active && profs) {
+          const map: Record<string, { username?: string | null; email?: string | null }> = {};
+          for (const p of profs) {
+            map[p.id] = p;
+          }
+          setOwnerProfiles(map);
+        }
+      }
+
+      if (active) setLoading(false);
+    }
+
+    loadCardPassport();
+    return () => {
+      active = false;
+    };
+  }, [rawId]);
+
+  const handleTriggerLockdown = async () => {
+    if (!card) return;
+    if (!currentUser) {
+      setErrorMsg('Devi effettuare il login per inviare una segnalazione di Lock-down.');
       return;
     }
 
-    setSubmitting(true);
+    setSendingLockdown(true);
+    setLockdownFeedback('');
     setErrorMsg('');
-    setSuccessMsg('');
 
-    const { error } = await supabase
-      .from('trades')
-      .update({
-        sender_card_id: selectedSenderCardId,
-        receiver_card_id: selectedReceiverCardId,
-        last_updated_by: currentUserId,
-        status: isCounter ? 'counter_offer' : 'offer_sent',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', trade.id);
-
-    setSubmitting(false);
-
-    if (error) {
-      setErrorMsg(error.message);
-      return;
-    }
-
-    setCounterMode(false);
-    setSuccessMsg(
-      isCounter
-        ? 'Contro-offerta inviata!'
-        : 'Proposta di scambio inviata! In attesa di risposta.'
-    );
-    await loadTradeRoom(currentUserId);
-  };
-
-  const handleConfirmTrade = async () => {
-    if (!trade) return;
-    setSubmitting(true);
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    const { error } = await supabase.rpc('execute_card_trade', {
-      p_trade_id: trade.id,
+    const { error: dbErr } = await supabase.from('lockdown_requests').insert({
+      reporter_user_id: currentUser.id,
+      reporter_email: currentUser.email,
+      card_id: card.id,
+      notes:
+        lockdownNotes.trim() ||
+        `Segnalazione Lock-down per ${card.card_name} (${card.set_name || 'Set N/D'} #${card.card_number || 'N/D'})`,
+      status: 'open',
     });
 
-    setSubmitting(false);
-
-    if (error) {
-      setErrorMsg(`Errore completamento scambio: ${error.message}`);
+    if (dbErr) {
+      setSendingLockdown(false);
+      setErrorMsg(`Errore salvataggio segnalazione: ${dbErr.message}`);
       return;
     }
 
-    setSuccessMsg(
-      'Scambio completato! Le carte sono state assegnate nei rispettivi binder e i Passaporti Digitali sono stati aggiornati.'
-    );
-    await loadTradeRoom(currentUserId);
-  };
+    // Invia notifica email SOLO all'amministratore tramite API route
+    await fetch('/api/lockdown-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reporterEmail: currentUser.email,
+        reporterId: currentUser.id,
+        cardName: card.card_name,
+        cardId: card.id,
+        notes: lockdownNotes.trim(),
+      }),
+    }).catch(() => null);
 
-  const handleRejectTrade = async () => {
-    if (!trade) return;
-    setSubmitting(true);
-    await supabase
-      .from('trades')
-      .update({ status: 'rejected', updated_at: new Date().toISOString() })
-      .eq('id', trade.id);
-    setSubmitting(false);
-    router.push('/profile');
+    setSendingLockdown(false);
+    setShowLockdownModal(false);
+    setLockdownNotes('');
+    setLockdownFeedback(
+      "Segnalazione Lock-down inviata all'amministratore. Riceverai conferma appena la carta verrà bloccata a sistema."
+    );
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
-        Apertura Stanza Scambi...
+        Caricamento Passaporto Digitale...
       </div>
     );
   }
 
-  if (!trade) {
+  if (errorMsg || !card) {
     return (
-      <div className="min-h-screen bg-slate-950 text-red-400 flex items-center justify-center text-sm">
-        {errorMsg || 'Stanza non disponibile.'}
+      <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex items-center justify-center">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4 text-center">
+          <p className="text-sm font-bold text-red-400">{errorMsg || 'Carta non trovata'}</p>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl border border-slate-700"
+          >
+            ← Torna indietro
+          </button>
+        </div>
       </div>
     );
   }
 
-  const proposedSenderCard = senderCards.find((c) => c.id === selectedSenderCardId);
-  const proposedReceiverCard = receiverCards.find((c) => c.id === selectedReceiverCardId);
+  const displayImage = card.image_url || card.card_image || '';
+  const firstOwnerId = card.original_owner_id || card.user_id;
+  const firstOwnerLabel = formatOwnerName(ownerProfiles[firstOwnerId], firstOwnerId);
+  const currentOwnerLabel = formatOwnerName(ownerProfiles[card.user_id], card.user_id);
 
-  const canRespondToOffer =
-    (trade.status === 'offer_sent' || trade.status === 'counter_offer') &&
-    trade.last_updated_by !== currentUserId;
+  const conditionLabel =
+    card.condition ||
+    (card.is_graded === 'graded' || card.grade_company || card.grade_score != null
+      ? `Gradata ${card.grade_company || ''} ${card.grade_score ?? card.grade ?? ''}`.trim()
+      : 'RAW / Inserita manualmente');
 
-  const canEditSelection = trade.status === 'room_open' || counterMode;
-
-  const renderCardPreview = (card: TradeCard | undefined, label: string) => {
-    const img = card?.image_url || card?.card_image || '';
-    return (
-      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col items-center text-center space-y-2">
-        <span className="text-[10px] uppercase tracking-wider font-bold text-amber-400">
-          {label}
-        </span>
-        {img ? (
-          <img
-            src={img}
-            alt={card?.card_name || label}
-            className="w-36 h-48 object-contain rounded-xl bg-slate-900 p-2"
-          />
-        ) : (
-          <div className="w-36 h-48 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-xs text-slate-500">
-            Nessuna carta selezionata
-          </div>
-        )}
-        <p className="text-xs font-bold text-slate-100">
-          {card?.card_name || 'Seleziona dal binder'}
-        </p>
-        {card && (
-          <p className="text-[11px] text-slate-400">
-            {card.set_name || 'Set N/D'} {card.rarity ? `• ${card.rarity}` : ''}
-          </p>
-        )}
-      </div>
-    );
-  };
+  const history = Array.isArray(card.provenance_history) ? card.provenance_history : [];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-10 pb-24">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex flex-wrap justify-between items-center gap-3 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
           <div>
             <h1 className="text-lg font-bold text-amber-400">
-              🔄 Stanza Scambi — Ashkro's Vault
+              🪪 Passaporto Digitale Carta — Ashkro's Vault
             </h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Stato attuale: <span className="text-amber-400 font-mono">{trade.status}</span>
+            <p className="text-xs text-slate-400 font-mono mt-0.5">
+              ID Passaporto: {card.public_qr_code_id || card.id}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => loadTradeRoom(currentUserId)}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700"
+              onClick={() => setShowLockdownModal((prev) => !prev)}
+              className="px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-300 text-xs font-bold rounded-xl border border-red-500/40 transition-all"
             >
-              ↻ Aggiorna
+              🚨 Lock-down
             </button>
             <a
-              href="/profile"
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700"
+              href="/binder"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition-all"
             >
-              ← Profilo
+              ← Vai al Binder
             </a>
           </div>
         </div>
 
-        {errorMsg && (
-          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs p-4 rounded-xl">
-            {errorMsg}
+        {lockdownFeedback && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs p-4 rounded-xl">
+            {lockdownFeedback}
           </div>
         )}
 
-        {successMsg && (
-          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs p-4 rounded-xl">
-            {successMsg}
+        {showLockdownModal && (
+          <div className="bg-slate-900 border border-red-500/40 p-5 rounded-2xl shadow-xl space-y-3">
+            <h2 className="text-sm font-bold text-red-400">
+              🚨 Segnala Smarrimento / Furto (Lock-down)
+            </h2>
+            <p className="text-xs text-slate-400">
+              Verrà inviata una segnalazione riservata esclusivamente all'amministratore del
+              sito per mettere la carta in lock-down.
+            </p>
+            <textarea
+              rows={3}
+              placeholder="Scrivi eventuali dettagli (es. rubata/smarrita, numero di gradazione, lingua, ecc.)..."
+              value={lockdownNotes}
+              onChange={(e) => setLockdownNotes(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLockdownModal(false)}
+                className="px-3.5 py-2 bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                disabled={sendingLockdown}
+                onClick={handleTriggerLockdown}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl disabled:opacity-50"
+              >
+                {sendingLockdown ? 'Invio...' : 'Invia Segnalazione Lock-down'}
+              </button>
+            </div>
           </div>
         )}
 
-        <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-5">
-          <h2 className="text-sm font-bold text-slate-100 text-center">Proposta di Scambio</h2>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-center">
-            {renderCardPreview(proposedSenderCard, 'Carta offerta da Utente A')}
-            {renderCardPreview(proposedReceiverCard, 'Carta richiesta a Utente B')}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
+          <div className="flex items-center justify-center bg-slate-950 border border-slate-800 rounded-2xl p-4">
+            {displayImage ? (
+              <img
+                src={displayImage}
+                alt={card.card_name}
+                className="max-h-72 object-contain rounded-xl"
+              />
+            ) : (
+              <div className="h-64 flex items-center justify-center text-xs text-slate-500">
+                Foto non disponibile
+              </div>
+            )}
           </div>
 
-          {trade.status === 'completed' && (
-            <div className="text-center pt-2">
-              <a
-                href="/binder"
-                className="inline-block px-5 py-2.5 bg-emerald-500 text-slate-950 font-bold text-xs rounded-xl"
-              >
-                Scambio completato — Vai al tuo Binder
-              </a>
+          <div className="md:col-span-2 space-y-4">
+            <div>
+              <span className="inline-block text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 border border-amber-500/40 text-amber-300 px-2.5 py-1 rounded-md">
+                {card.game_title || 'Pokémon'} • {card.language || 'Lingua N/D'}
+              </span>
+              <h2 className="text-xl font-bold text-slate-100 mt-2">{card.card_name}</h2>
+              <p className="text-xs text-amber-400 font-medium mt-0.5">
+                Set: {card.set_name || 'N/D'} • Numero: #{card.card_number || 'N/D'}
+              </p>
             </div>
-          )}
 
-          {canEditSelection && trade.status !== 'completed' && (
-            <div className="flex justify-center pt-2">
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => handleSendOrCounterOffer(counterMode)}
-                className="px-6 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg disabled:opacity-50"
-              >
-                {submitting
-                  ? 'Invio in corso...'
-                  : counterMode
-                  ? '📤 Invia Contro-offerta'
-                  : '📤 Invia Proposta di Scambio'}
-              </button>
-            </div>
-          )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl">
+                <span className="text-slate-400 block text-[11px]">Condizioni / Gradazione</span>
+                <span className="font-semibold text-amber-300">{conditionLabel}</span>
+              </div>
 
-          {canRespondToOffer && !counterMode && (
-            <div className="flex flex-wrap justify-center gap-3 pt-2">
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={handleConfirmTrade}
-                className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg disabled:opacity-50"
-              >
-                ✅ Conferma Scambio
-              </button>
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => setCounterMode(true)}
-                className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg disabled:opacity-50"
-              >
-                🔁 Fai Contro-offerta
-              </button>
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={handleRejectTrade}
-                className="px-5 py-2.5 bg-red-500/15 hover:bg-red-500/25 text-red-400 font-bold text-xs rounded-xl border border-red-500/30 disabled:opacity-50"
-              >
-                ❌ Rifiuta
-              </button>
+              <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl">
+                <span className="text-slate-400 block text-[11px]">Lingua / Rarità</span>
+                <span className="font-semibold text-slate-100">
+                  {card.language || 'N/D'} {card.rarity ? `• ${card.rarity}` : ''}
+                </span>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl">
+                <span className="text-slate-400 block text-[11px]">Primo proprietario</span>
+                <span className="font-semibold text-slate-100">{firstOwnerLabel}</span>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl">
+                <span className="text-slate-400 block text-[11px]">Proprietario attuale</span>
+                <span className="font-semibold text-emerald-400">{currentOwnerLabel}</span>
+              </div>
             </div>
-          )}
+
+            {card.grade_number && (
+              <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl text-xs">
+                <span className="text-slate-400 block text-[11px]">Numero di gradazione</span>
+                <span className="font-mono font-semibold text-slate-100">{card.grade_number}</span>
+              </div>
+            )}
+
+            <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2.5">
+              <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider">
+                📜 Storico Passaggi ({history.length})
+              </h3>
+
+              {history.length === 0 ? (
+                <p className="text-xs text-slate-400">
+                  Nessuno scambio registrato: la carta è presso il primo proprietario.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {history.map((step, idx) => (
+                    <div
+                      key={`${step.trade_id || idx}-${idx}`}
+                      className="text-xs bg-slate-900 border border-slate-800/80 p-2.5 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1"
+                    >
+                      <span className="text-slate-200">
+                        <strong>{step.from_username || step.from_user_id || 'Utente'}</strong> →{' '}
+                        <strong className="text-emerald-400">
+                          {step.to_username || step.to_user_id || 'Utente'}
+                        </strong>
+                      </span>
+                      {step.traded_at && (
+                        <span className="text-[11px] font-mono text-slate-400">
+                          {new Date(step.traded_at).toLocaleDateString('it-IT')}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
-
-        {canEditSelection && trade.status !== 'completed' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-amber-400 uppercase">
-                Binder Utente A (seleziona 1 carta)
-              </h3>
-              <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
-                {senderCards.map((c) => {
-                  const img = c.image_url || c.card_image || '';
-                  const selected = c.id === selectedSenderCardId;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setSelectedSenderCardId(c.id)}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        selected
-                          ? 'bg-amber-500/15 border-amber-500'
-                          : 'bg-slate-950 border-slate-800 hover:border-slate-600'
-                      }`}
-                    >
-                      {img && (
-                        <img
-                          src={img}
-                          alt={c.card_name}
-                          className="w-full h-28 object-contain mb-2 rounded"
-                        />
-                      )}
-                      <p className="text-xs font-bold text-slate-100 truncate">{c.card_name}</p>
-                      <p className="text-[10px] text-slate-400 truncate">{c.set_name || ''}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-amber-400 uppercase">
-                Binder Utente B (seleziona 1 carta)
-              </h3>
-              <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
-                {receiverCards.map((c) => {
-                  const img = c.image_url || c.card_image || '';
-                  const selected = c.id === selectedReceiverCardId;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setSelectedReceiverCardId(c.id)}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        selected
-                          ? 'bg-amber-500/15 border-amber-500'
-                          : 'bg-slate-950 border-slate-800 hover:border-slate-600'
-                      }`}
-                    >
-                      {img && (
-                        <img
-                          src={img}
-                          alt={c.card_name}
-                          className="w-full h-28 object-contain mb-2 rounded"
-                        />
-                      )}
-                      <p className="text-xs font-bold text-slate-100 truncate">{c.card_name}</p>
-                      <p className="text-[10px] text-slate-400 truncate">{c.set_name || ''}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-export default function TradeRoomPage() {
+export default function CardPassportPage() {
   return (
     <Suspense
       fallback={
         <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
-          Apertura Stanza Scambi...
+          Caricamento Passaporto Digitale...
         </div>
       }
     >
-      <TradeRoomContent />
+      <CardPassportContent />
     </Suspense>
   );
 }
