@@ -375,6 +375,7 @@ export default function AddCardClient() {
                   required
                   value={cardName}
                   onChange={(e) => setCardName(e.target.value)}
+                  placeholder="Es. Charizard"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
@@ -387,12 +388,26 @@ export default function AddCardClient() {
                   type="text"
                   value={setName}
                   onChange={(e) => setSetName(e.target.value)}
+                  placeholder="Es. Lost Origin"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Numero Carta
+                </label>
+                <input
+                  type="text"
+                  value={cardNumber}
+                  onChange={(e) => setCardNumber(e.target.value)}
+                  placeholder="Es. TG03/TG30"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
                   Rarità
@@ -401,6 +416,7 @@ export default function AddCardClient() {
                   type="text"
                   value={rarity}
                   onChange={(e) => setRarity(e.target.value)}
+                  placeholder="Es. Trainer Gallery"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
