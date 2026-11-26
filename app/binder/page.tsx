@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
+import VirtualBinder, { BinderCardItem } from '../VirtualBinder/VirtualBinder';
 
 interface CardItem {
   id: string;
@@ -35,6 +36,7 @@ export default function BinderPage() {
   const [cards, setCards] = useState<CardItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [viewMode, setViewMode] = useState<'grid' | 'binder3d'>('grid');
 
   // Stati per Ricerca e Filtri
   const [searchQuery, setSearchQuery] = useState('');
@@ -116,6 +118,16 @@ export default function BinderPage() {
       return 0;
     });
 
+  const virtualBinderCards: BinderCardItem[] = filteredAndSortedCards.map((card, index) => ({
+    id: card.id,
+    name: card.card_name,
+    setName: card.set_name || undefined,
+    cardNumber: card.card_number || undefined,
+    imageUrl: card.image_url || card.card_image || undefined,
+    rarity: card.rarity || undefined,
+    customOrder: index,
+  }));
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
@@ -127,7 +139,7 @@ export default function BinderPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-12 pb-24">
       <div className="max-w-7xl mx-auto space-y-8">
-        {/* Header con Tasto + Aggiungi Carta */}
+        {/* Header con Selettore Vista e Tasto + Aggiungi Carta */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
           <div>
             <h1 className="text-xl font-bold text-amber-400">🛡️ Ashkro's Vault - Il tuo Binder</h1>
@@ -135,7 +147,32 @@ export default function BinderPage() {
               Gestisci la tua collezione TCG, scansiona i QR code e tieni traccia delle tue carte phygital.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="inline-flex bg-slate-950 border border-slate-800 rounded-xl p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setViewMode('grid')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                  viewMode === 'grid'
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                🗂️ Griglia
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('binder3d')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                  viewMode === 'binder3d'
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                📖 Binder 3D
+              </button>
+            </div>
+
             <a
               href="/add-card"
               className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-lg flex items-center gap-2"
@@ -177,7 +214,7 @@ export default function BinderPage() {
           </div>
         </div>
 
-        {/* Griglia delle Carte */}
+        {/* Contenuto: Griglia o Binder 3D */}
         {filteredAndSortedCards.length === 0 ? (
           <div className="text-center py-20 bg-slate-900/50 border border-slate-800/80 rounded-3xl space-y-4">
             <p className="text-slate-400 text-sm">
@@ -190,6 +227,12 @@ export default function BinderPage() {
               Aggiungi la tua prima carta
             </a>
           </div>
+        ) : viewMode === 'binder3d' ? (
+          <VirtualBinder
+            cards={virtualBinderCards}
+            title="Il Mio Binder — Ashkro's Vault"
+            onCardClick={(clicked) => router.push(`/card/${clicked.id}`)}
+          />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {filteredAndSortedCards.map((card) => {
