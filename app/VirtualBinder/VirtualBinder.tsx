@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import HTMLFlipBook from 'react-pageflip';
 
 export interface BinderCardItem {
@@ -23,14 +23,15 @@ interface VirtualBinderProps {
 
 type SortMode = 'custom' | 'name-asc' | 'name-desc' | 'number-asc';
 
+const STORAGE_KEY = 'ashkros_virtual_binder_style_v1';
+
 export default function VirtualBinder({
   cards,
   title = 'Il Mio Binder',
-  cardsPerPage = 9, // 3x3 per pagina sfogliabile (o imposta 12 per 4x3)
+  cardsPerPage = 9,
   onOrderChange,
   onCardClick,
 }: VirtualBinderProps) {
-  // 1. Personalizzazione copertina e fogli
   const [isOpen, setIsOpen] = useState(false);
   const [coverImageUrl, setCoverImageUrl] = useState('');
   const [coverColor, setCoverColor] = useState('#1e293b');
@@ -41,10 +42,44 @@ export default function VirtualBinder({
     cards.map((c) => c.id)
   );
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
+  const [isDraggingCard, setIsDraggingCard] = useState(false);
 
   const bookRef = useRef<any>(null);
 
-  // Sincronizza eventuali nuove carte aggiunte dall'esterno
+  // Ripristina copertina e colori salvati in locale
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.coverImageUrl === 'string') setCoverImageUrl(parsed.coverImageUrl);
+      if (typeof parsed.coverColor === 'string') setCoverColor(parsed.coverColor);
+      if (typeof parsed.pageColor === 'string') setPageColor(parsed.pageColor);
+      if (typeof parsed.soundEnabled === 'boolean') setSoundEnabled(parsed.soundEnabled);
+    } catch {
+      // Ignora errori di lettura localStorage
+    }
+  }, []);
+
+  // Salva copertina e colori quando cambiano
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          coverImageUrl,
+          coverColor,
+          pageColor,
+          soundEnabled,
+        })
+      );
+    } catch {
+      // Ignora eventuale quota superata se l'immagine è molto grande
+    }
+  }, [coverImageUrl, coverColor, pageColor, soundEnabled]);
+
   const effectiveOrderIds = useMemo(() => {
     const existingSet = new Set(cards.map((c) => c.id));
     const filtered = customOrderIds.filter((id) => existingSet.has(id));
@@ -75,14 +110,12 @@ export default function VirtualBinder({
     return ordered;
   }, [cards, effectiveOrderIds, sortMode]);
 
-  // 2. Effetto sonoro apertura zip / sfoglio pagina (Web Audio API senza asset esterni)
   const playZipAndOpenSound = () => {
     if (!soundEnabled || typeof window === 'undefined') return;
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new AudioCtx();
 
-      // Suono "zip" (rumore filtrato con sweep di frequenza)
       const duration = 0.28;
       const bufferSize = Math.floor(ctx.sampleRate * duration);
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
@@ -112,7 +145,7 @@ export default function VirtualBinder({
       noise.start();
       noise.stop(ctx.currentTime + duration);
     } catch {
-      // Ignora se il browser blocca l'audio prima di un gesto utente
+      // Ignora errori audio
     }
   };
 
@@ -157,7 +190,6 @@ export default function VirtualBinder({
     setIsOpen((prev) => !prev);
   };
 
-  // Caricamento immagine di copertina dal PC/telefono
   const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -170,15 +202,20 @@ export default function VirtualBinder({
     reader.readAsDataURL(file);
   };
 
-  // Riordinamento tramite drag & drop
   const applyNewOrder = (nextIds: string[]) => {
     setSortMode('custom');
     setCustomOrderIds(nextIds);
     onOrderChange?.(nextIds);
   };
 
-  const handleDropOnCard = (targetCardId: string) => {
-    if (!draggedCardId || draggedCardId === targetCardId) return;
+  const handleDropOnCard = (e: React.DragEvent, targetCardId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draggedCardId || draggedCardId === targetCardId) {
+      setDraggedCardId(null);
+      setIsDraggingCard(false);
+      return;
+    }
     const currentIds = sortedCards.map((c) => c.id);
     const fromIdx = currentIds.indexOf(draggedCardId);
     const toIdx = currentIds.indexOf(targetCardId);
@@ -189,9 +226,12 @@ export default function VirtualBinder({
     updated.splice(toIdx, 0, moved);
     applyNewOrder(updated);
     setDraggedCardId(null);
+    setIsDraggingCard(false);
   };
 
-  const moveCardByStep = (cardId: string, delta: number) => {
+  const moveCardByStep = (e: React.MouseEvent, cardId: string, delta: number) => {
+    e.preventDefault();
+    e.stopPropagation();
     const currentIds = sortedCards.map((c) => c.id);
     const idx = currentIds.indexOf(cardId);
     const targetIdx = idx + delta;
@@ -203,7 +243,6 @@ export default function VirtualBinder({
     applyNewOrder(updated);
   };
 
-  // Suddivisione in pagine del raccoglitore
   const pages = useMemo(() => {
     const chunks: BinderCardItem[][] = [];
     for (let i = 0; i < sortedCards.length; i += cardsPerPage) {
@@ -214,19 +253,17 @@ export default function VirtualBinder({
   }, [sortedCards, cardsPerPage]);
 
   const gridColsClass =
-    cardsPerPage === 12
-      ? 'grid-cols-4 grid-rows-3'
-      : 'grid-cols-3 grid-rows-3';
+    cardsPerPage === 12 ? 'grid-cols-4 grid-rows-3' : 'grid-cols-3 grid-rows-3';
 
   return (
     <div className="w-full space-y-6 text-slate-100">
-      {/* Barra personalizzazione copertina, fogli e ordinamento */}
+      {/* Pannello personalizzazione copertina, fogli e ordinamento (sempre visibile) */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-amber-400">{title}</h2>
             <p className="text-xs text-slate-400">
-              Personalizza copertina, colore dei fogli e ordine delle carte
+              Personalizza copertina, colore dei fogli e riordina senza girare pagina
             </p>
           </div>
 
@@ -250,7 +287,6 @@ export default function VirtualBinder({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          {/* Colore copertina */}
           <label className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
             <span className="text-slate-300">Colore copertina</span>
             <input
@@ -261,7 +297,6 @@ export default function VirtualBinder({
             />
           </label>
 
-          {/* Colore fogli */}
           <label className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
             <span className="text-slate-300">Colore fogli</span>
             <input
@@ -272,7 +307,6 @@ export default function VirtualBinder({
             />
           </label>
 
-          {/* Ordinamento */}
           <label className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col gap-1">
             <span className="text-slate-400 text-[11px]">Ordine carte</span>
             <select
@@ -287,9 +321,19 @@ export default function VirtualBinder({
             </select>
           </label>
 
-          {/* Immagine o URL copertina */}
           <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1.5">
-            <span className="text-slate-400 text-[11px] block">Immagine copertina</span>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 text-[11px]">Copertina (File o URL)</span>
+              {coverImageUrl && (
+                <button
+                  type="button"
+                  onClick={() => setCoverImageUrl('')}
+                  className="text-[10px] text-red-400 hover:underline"
+                >
+                  Rimuovi img
+                </button>
+              )}
+            </div>
             <input
               type="file"
               accept="image/*"
@@ -307,7 +351,7 @@ export default function VirtualBinder({
         </div>
       </div>
 
-      {/* Vista chiusa (Copertina con zip) oppure aperta (Libro sfogliabile) */}
+      {/* Vista chiusa o aperta */}
       {!isOpen ? (
         <div className="flex justify-center py-4">
           <button
@@ -333,7 +377,6 @@ export default function VirtualBinder({
               </p>
             </div>
 
-            {/* Linea decorativa zip */}
             <div className="relative z-10 border-t border-dashed border-amber-300/80 pt-3 flex items-center justify-between text-xs font-bold text-amber-300">
               <span>🤐 Clicca per aprire la zip</span>
               <span>→</span>
@@ -355,7 +398,7 @@ export default function VirtualBinder({
             </button>
 
             <span className="text-xs text-slate-400">
-              Trascina o usa le frecce sulle carte per riordinare
+              Usa le frecce o trascina per riordinare; clicca su “Scheda” per aprire la carta
             </span>
 
             <button
@@ -382,6 +425,7 @@ export default function VirtualBinder({
               minHeight={380}
               maxHeight={680}
               showCover={false}
+              useMouseEvents={!isDraggingCard}
               onFlip={playPageFlipSound}
               className="shadow-2xl rounded-xl"
             >
@@ -401,18 +445,35 @@ export default function VirtualBinder({
                       <div
                         key={card.id}
                         draggable
-                        onDragStart={() => setDraggedCardId(card.id)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => handleDropOnCard(card.id)}
-                        onClick={() => onCardClick?.(card)}
-                        className="group relative bg-white/90 hover:bg-white border border-slate-300 rounded-lg p-1.5 shadow-sm flex flex-col justify-between cursor-grab active:cursor-grabbing transition"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          setDraggedCardId(card.id);
+                          setIsDraggingCard(true);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                        onDrop={(e) => handleDropOnCard(e, card.id)}
+                        onDragEnd={() => {
+                          setDraggedCardId(null);
+                          setIsDraggingCard(false);
+                        }}
+                        className={`group relative bg-white/95 border rounded-lg p-1.5 shadow-sm flex flex-col justify-between cursor-grab active:cursor-grabbing transition ${
+                          draggedCardId === card.id
+                            ? 'border-amber-500 ring-2 ring-amber-400/50'
+                            : 'border-slate-300'
+                        }`}
                       >
                         <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden rounded bg-slate-100">
                           {card.imageUrl ? (
                             <img
                               src={card.imageUrl}
                               alt={card.name}
-                              className="w-full h-full object-contain"
+                              draggable={false}
+                              className="w-full h-full object-contain pointer-events-none"
                             />
                           ) : (
                             <span className="text-[10px] font-bold text-slate-600 text-center px-1">
@@ -425,26 +486,42 @@ export default function VirtualBinder({
                           <span className="truncate font-semibold text-slate-800">
                             {card.name}
                           </span>
+
                           <div
                             className="flex items-center gap-0.5 shrink-0"
-                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
                           >
                             <button
                               type="button"
                               title="Sposta indietro"
-                              onClick={() => moveCardByStep(card.id, -1)}
-                              className="px-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-800"
+                              onClick={(e) => moveCardByStep(e, card.id, -1)}
+                              className="px-1.5 py-0.5 rounded bg-slate-200 hover:bg-amber-400 text-slate-900 font-bold"
                             >
                               ‹
                             </button>
                             <button
                               type="button"
                               title="Sposta avanti"
-                              onClick={() => moveCardByStep(card.id, 1)}
-                              className="px-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-800"
+                              onClick={(e) => moveCardByStep(e, card.id, 1)}
+                              className="px-1.5 py-0.5 rounded bg-slate-200 hover:bg-amber-400 text-slate-900 font-bold"
                             >
                               ›
                             </button>
+                            {onCardClick && (
+                              <button
+                                type="button"
+                                title="Apri Passaporto Carta"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  onCardClick(card);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-amber-300 font-bold"
+                              >
+                                Scheda
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>

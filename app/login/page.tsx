@@ -1,8 +1,8 @@
 'use client';
-
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useRouter } from 'next/navigation';
+import PrivacyConsentModal from '../terms/PrivacyConsentModal';
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -36,12 +36,16 @@ export default function AuthPage() {
         router.refresh();
       }
     } else {
-      // Flusso di Registrazione con richiesta conferma email
+      // Flusso di Registrazione con richiesta conferma email e salvataggio consenso privacy
       const { error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           emailRedirectTo: `${window.location.origin}/binder`,
+          data: {
+            privacy_accepted: true,
+            privacy_accepted_at: new Date().toISOString(),
+          },
         },
       });
 
@@ -57,6 +61,8 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+      <PrivacyConsentModal />
+
       <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
         
         <div className="text-center space-y-2">
