@@ -33,6 +33,7 @@ export default function VirtualBinder({
   onCardClick,
 }: VirtualBinderProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [styleHydrated, setStyleHydrated] = useState(false);
   const [coverImageUrl, setCoverImageUrl] = useState('');
   const [coverColor, setCoverColor] = useState('#1e293b');
   const [pageColor, setPageColor] = useState('#f8fafc');
@@ -46,25 +47,28 @@ export default function VirtualBinder({
 
   const bookRef = useRef<any>(null);
 
-  // Ripristina copertina e colori salvati in locale
+  // 1. Ripristina copertina e colori salvati in locale
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.coverImageUrl === 'string') setCoverImageUrl(parsed.coverImageUrl);
-      if (typeof parsed.coverColor === 'string') setCoverColor(parsed.coverColor);
-      if (typeof parsed.pageColor === 'string') setPageColor(parsed.pageColor);
-      if (typeof parsed.soundEnabled === 'boolean') setSoundEnabled(parsed.soundEnabled);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.coverImageUrl === 'string') setCoverImageUrl(parsed.coverImageUrl);
+        if (typeof parsed.coverColor === 'string') setCoverColor(parsed.coverColor);
+        if (typeof parsed.pageColor === 'string') setPageColor(parsed.pageColor);
+        if (typeof parsed.soundEnabled === 'boolean') setSoundEnabled(parsed.soundEnabled);
+      }
     } catch {
       // Ignora errori di lettura localStorage
+    } finally {
+      setStyleHydrated(true);
     }
   }, []);
 
-  // Salva copertina e colori quando cambiano
+  // 2. Salva copertina e colori solo dopo l'idratazione iniziale
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (!styleHydrated || typeof window === 'undefined') return;
     try {
       window.localStorage.setItem(
         STORAGE_KEY,
@@ -76,9 +80,31 @@ export default function VirtualBinder({
         })
       );
     } catch {
-      // Ignora eventuale quota superata se l'immagine è molto grande
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            coverImageUrl: '',
+            coverColor,
+            pageColor,
+            soundEnabled,
+          })
+        );
+      } catch {
+        // Ignora
+      }
     }
-  }, [coverImageUrl, coverColor, pageColor, soundEnabled]);
+  }, [styleHydrated, coverImageUrl, coverColor, pageColor, soundEnabled]);
+
+  // 3. Mantieni sincronizzato l'ordine quando cambia la lista delle carte
+  useEffect(() => {
+    setCustomOrderIds((prev) => {
+      const cardIds = cards.map((c) => c.id);
+      const kept = prev.filter((id) => cardIds.includes(id));
+      const added = cardIds.filter((id) => !kept.includes(id));
+      return [...kept, ...added];
+    });
+  }, [cards]);
 
   const effectiveOrderIds = useMemo(() => {
     const existingSet = new Set(cards.map((c) => c.id));

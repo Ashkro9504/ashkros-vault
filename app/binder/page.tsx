@@ -23,6 +23,7 @@ interface CardItem {
   purchase_price?: number | null;
   language?: string | null;
   public_qr_code_id?: string | null;
+  binder_order?: number | null;
   created_at: string;
 }
 
@@ -40,7 +41,7 @@ export default function BinderPage() {
 
   // Stati per Ricerca e Filtri
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'latest' | 'oldest' | 'alphabetical'>('latest');
+  const [sortBy, setSortBy] = useState<'custom' | 'latest' | 'oldest' | 'alphabetical'>('custom');
 
   const router = useRouter();
 
@@ -75,7 +76,9 @@ export default function BinderPage() {
     const { data, error } = await supabase
       .from('user_cards')
       .select('*')
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .order('binder_order', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: false });
 
     if (!active) return;
 
@@ -87,6 +90,31 @@ export default function BinderPage() {
     }
     setLoading(false);
   }
+
+  const handleSaveBinderOrder = async (orderedIds: string[]) => {
+    if (!user) return;
+
+    setCards((prev) => {
+      const map = new Map(prev.map((c) => [c.id, c]));
+      const reordered: CardItem[] = [];
+      orderedIds.forEach((id, idx) => {
+        const item = map.get(id);
+        if (item) reordered.push({ ...item, binder_order: idx });
+      });
+      prev.forEach((item) => {
+        if (!orderedIds.includes(item.id)) reordered.push(item);
+      });
+      return reordered;
+    });
+
+    for (let i = 0; i < orderedIds.length; i++) {
+      await supabase
+        .from('user_cards')
+        .update({ binder_order: i })
+        .eq('id', orderedIds[i])
+        .eq('user_id', user.id);
+    }
+  };
 
   const handleDeleteCard = async (cardId: string) => {
     if (!confirm('Vuoi davvero rimuovere questa carta dal tuo Vault?')) return;
@@ -106,6 +134,12 @@ export default function BinderPage() {
         (card.game_title && card.game_title.toLowerCase().includes(searchQuery.toLowerCase()))
     )
     .sort((a, b) => {
+      if (sortBy === 'custom') {
+        const orderA = a.binder_order ?? Number.MAX_SAFE_INTEGER;
+        const orderB = b.binder_order ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
       if (sortBy === 'latest') {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       }
@@ -125,7 +159,7 @@ export default function BinderPage() {
     cardNumber: card.card_number || undefined,
     imageUrl: card.image_url || card.card_image || undefined,
     rarity: card.rarity || undefined,
-    customOrder: index,
+    customOrder: card.binder_order ?? index,
   }));
 
   if (loading) {
@@ -207,6 +241,7 @@ export default function BinderPage() {
               onChange={(e) => setSortBy(e.target.value as any)}
               className="flex-1 sm:flex-none bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
             >
+              <option value="custom">Ordine Binder salvato</option>
               <option value="latest">Ultimo inserito</option>
               <option value="oldest">Primo inserito</option>
               <option value="alphabetical">Ordine alfabetico (A-Z)</option>
@@ -231,6 +266,7 @@ export default function BinderPage() {
           <VirtualBinder
             cards={virtualBinderCards}
             title="Il Mio Binder — Ashkro's Vault"
+            onOrderChange={handleSaveBinderOrder}
             onCardClick={(clicked) => router.push(`/card/${clicked.id}`)}
           />
         ) : (
