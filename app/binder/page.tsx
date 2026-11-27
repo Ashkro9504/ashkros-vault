@@ -33,12 +33,16 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+const PRESET_LANGUAGES = ['IT', 'EN', 'JP', 'FR', 'DE', 'ES'];
+
 export default function BinderPage() {
   const [user, setUser] = useState<any>(null);
   const [cards, setCards] = useState<CardItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [statusMsg, setStatusMsg] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'binder3d'>('grid');
+  const [languageDrafts, setLanguageDrafts] = useState<Record<string, string>>({});
 
   // Stati per Ricerca e Filtri
   const [searchQuery, setSearchQuery] = useState('');
@@ -90,9 +94,38 @@ export default function BinderPage() {
       setErrorMsg(`Errore lettura binder: ${error.message}`);
     } else if (data) {
       setCards(data);
+      const nextDrafts: Record<string, string> = {};
+      data.forEach((c) => {
+        nextDrafts[c.id] = c.language || 'IT';
+      });
+      setLanguageDrafts(nextDrafts);
     }
     setLoading(false);
   }
+
+  const handleSaveCardLanguage = async (cardId: string, rawLang: string) => {
+    if (!user) return;
+    const cleaned = rawLang.trim().toUpperCase() || 'IT';
+    setErrorMsg('');
+    setStatusMsg('');
+
+    setLanguageDrafts((prev) => ({ ...prev, [cardId]: cleaned }));
+    setCards((prev) =>
+      prev.map((c) => (c.id === cardId ? { ...c, language: cleaned } : c))
+    );
+
+    const { error } = await supabase
+      .from('user_cards')
+      .update({ language: cleaned })
+      .eq('id', cardId)
+      .eq('user_id', user.id);
+
+    if (error) {
+      setErrorMsg(`Errore salvataggio lingua: ${error.message}`);
+    } else {
+      setStatusMsg(`Lingua aggiornata a "${cleaned}".`);
+    }
+  };
 
   const handleToggleFavorite = async (card: CardItem) => {
     if (!user) return;
@@ -207,15 +240,17 @@ export default function BinderPage() {
     );
   }
 
+  const publicProfilePath = user?.id ? `/u/${user.id}` : '/binder';
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 md:p-12 pb-24">
       <div className="max-w-7xl mx-auto space-y-8">
-        {/* Header con Selettore Vista e Tasto + Aggiungi Carta */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
+        {/* Header con Selettore Vista, QR Profilo Pubblico e Tasto + Aggiungi Carta */}
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
           <div>
             <h1 className="text-xl font-bold text-amber-400">🛡️ Ashkro's Vault - Il tuo Binder</h1>
             <p className="text-xs text-slate-400 mt-1">
-              Gestisci la tua collezione TCG, scansiona i QR code e tieni traccia delle tue carte phygital.
+              Gestisci la tua collezione TCG, modifica la lingua delle carte e condividi il QR del tuo profilo.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -245,6 +280,15 @@ export default function BinderPage() {
             </div>
 
             <a
+              href={publicProfilePath}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold rounded-xl text-xs border border-amber-500/30 transition-all"
+            >
+              🔗 Binder Pubblico QR
+            </a>
+
+            <a
               href="/add-card"
               className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-lg flex items-center gap-2"
             >
@@ -253,9 +297,40 @@ export default function BinderPage() {
           </div>
         </div>
 
+        {/* Box QR Code Pubblico del Profilo (accessibile anche a utenti non registrati) */}
+        {user?.id && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="space-y-1 text-center sm:text-left">
+              <p className="text-xs font-bold text-amber-400">
+                📱 QR Code Profilo Pubblico (Accessibile senza registrazione)
+              </p>
+              <p className="text-xs text-slate-300">
+                Chiunque inquadri questo QR apre il tuo binder con le immagini e i dettagli di ogni carta.
+              </p>
+              <p className="text-[11px] font-mono text-slate-400 break-all">
+                {typeof window !== 'undefined' ? `${window.location.origin}/u/${user.id}` : `/u/${user.id}`}
+              </p>
+            </div>
+            <div className="bg-white p-2.5 rounded-xl shadow-md shrink-0">
+              <QRCodeSVG
+                value={`${typeof window !== 'undefined' ? window.location.origin : ''}/u/${user.id}`}
+                size={96}
+                level="H"
+                includeMargin={false}
+              />
+            </div>
+          </div>
+        )}
+
         {errorMsg && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs p-4 rounded-xl">
             {errorMsg}
+          </div>
+        )}
+
+        {statusMsg && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs p-4 rounded-xl">
+            {statusMsg}
           </div>
         )}
 
@@ -312,6 +387,7 @@ export default function BinderPage() {
             {filteredAndSortedCards.map((card) => {
               const displayImage = card.image_url || card.card_image || '';
               const qrTargetId = card.public_qr_code_id || card.id;
+              const currentLang = languageDrafts[card.id] ?? (card.language || 'IT');
               const isGradedCard =
                 card.is_graded === 'graded' ||
                 Boolean(card.grade_company) ||
@@ -344,16 +420,11 @@ export default function BinderPage() {
                               ? 'bg-amber-500 text-slate-950 border-amber-400'
                               : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-amber-500/50'
                           }`}
-                          title={
-                            card.is_favorite
-                              ? 'Rimuovi dai preferiti (sblocca per scambi)'
-                              : 'Aggiungi ai preferiti (esposta in vetrina, bloccata agli scambi)'
-                          }
                         >
                           {card.is_favorite ? '⭐ Preferito' : '☆ Preferito'}
                         </button>
-                        <span className="bg-slate-950 border border-slate-800 text-slate-300 text-[10px] font-bold px-2 py-1 rounded-lg">
-                          🌐 {card.language || 'IT'}
+                        <span className="bg-slate-950 border border-slate-800 text-amber-300 text-[10px] font-bold px-2 py-1 rounded-lg">
+                          🌐 {currentLang}
                         </span>
                       </div>
                     </div>
@@ -397,11 +468,64 @@ export default function BinderPage() {
                         Acquisto: € {card.purchase_price}
                       </p>
                     )}
+
+                    {/* Modifica / Inserimento manuale lingua carta */}
+                    <div className="mt-3 bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
+                      <label className="block text-[10px] font-semibold text-slate-400">
+                        Lingua carta (rapida o manuale)
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={
+                            PRESET_LANGUAGES.includes(currentLang) ? currentLang : 'CUSTOM'
+                          }
+                          onChange={(e) => {
+                            if (e.target.value !== 'CUSTOM') {
+                              handleSaveCardLanguage(card.id, e.target.value);
+                            }
+                          }}
+                          className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-100"
+                        >
+                          {PRESET_LANGUAGES.map((lang) => (
+                            <option key={lang} value={lang}>
+                              {lang}
+                            </option>
+                          ))}
+                          <option value="CUSTOM">Manuale...</option>
+                        </select>
+
+                        <input
+                          type="text"
+                          value={currentLang}
+                          onChange={(e) =>
+                            setLanguageDrafts((prev) => ({
+                              ...prev,
+                              [card.id]: e.target.value,
+                            }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleSaveCardLanguage(card.id, currentLang);
+                            }
+                          }}
+                          placeholder="Es. KO, ZH..."
+                          className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-100 uppercase"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => handleSaveCardLanguage(card.id, currentLang)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500 hover:text-slate-950 text-amber-300 border border-amber-500/40 text-[10px] font-bold transition shrink-0"
+                        >
+                          Salva
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="mt-4 pt-3 border-t border-slate-800 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-[10px] space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[10px] space-y-1">
                         <span className="text-amber-400 font-semibold block">Passaporto QR</span>
                         <a
                           href={`/card/${qrTargetId}`}
@@ -411,22 +535,23 @@ export default function BinderPage() {
                         >
                           Apri Scheda ↗
                         </a>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="bg-white p-1 rounded-lg shadow-sm">
-                          <QRCodeSVG
-                            value={`${typeof window !== 'undefined' ? window.location.origin : ''}/card/${qrTargetId}`}
-                            size={40}
-                          />
-                        </div>
                         <button
                           type="button"
                           onClick={() => handleDeleteCard(card.id)}
-                          className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/30 transition-colors text-xs"
+                          className="mt-1 px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/30 transition-colors text-[10px] font-bold"
                           title="Elimina carta"
                         >
-                          🗑️
+                          🗑️ Elimina
                         </button>
+                      </div>
+
+                      <div className="bg-white p-2 rounded-xl shadow-md shrink-0">
+                        <QRCodeSVG
+                          value={`${typeof window !== 'undefined' ? window.location.origin : ''}/card/${qrTargetId}`}
+                          size={88}
+                          level="H"
+                          includeMargin={false}
+                        />
                       </div>
                     </div>
 
