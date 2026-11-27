@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import HTMLFlipBook from 'react-pageflip';
+import { createClient } from '@supabase/supabase-js';
 
 export interface BinderCardItem {
   id: string;
@@ -24,7 +25,12 @@ interface VirtualBinderProps {
 
 type SortMode = 'favorites-first' | 'custom' | 'name-asc' | 'name-desc' | 'number-asc';
 
-const STORAGE_KEY = 'ashkros_virtual_binder_style_v1';
+const STORAGE_KEY = 'ashkros_virtual_binder_style_v2';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
 
 export default function VirtualBinder({
   cards,
@@ -34,7 +40,10 @@ export default function VirtualBinder({
   onCardClick,
 }: VirtualBinderProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
   const [styleHydrated, setStyleHydrated] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState('');
+
   const [coverImageUrl, setCoverImageUrl] = useState('');
   const [coverColor, setCoverColor] = useState('#1e293b');
   const [pageColor, setPageColor] = useState('#f8fafc');
@@ -48,54 +57,120 @@ export default function VirtualBinder({
 
   const bookRef = useRef<any>(null);
 
-  // 1. Ripristina copertina e colori salvati in locale
+  // 1. Carica stile da localStorage e poi da Supabase (se loggato)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (typeof parsed.coverImageUrl === 'string') setCoverImageUrl(parsed.coverImageUrl);
-        if (typeof parsed.coverColor === 'string') setCoverColor(parsed.coverColor);
-        if (typeof parsed.pageColor === 'string') setPageColor(parsed.pageColor);
-        if (typeof parsed.soundEnabled === 'boolean') setSoundEnabled(parsed.soundEnabled);
+    let active = true;
+
+    async function loadSettings() {
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = window.localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (typeof parsed.coverImageUrl === 'string') setCoverImageUrl(parsed.coverImageUrl);
+            if (typeof parsed.coverColor === 'string') setCoverColor(parsed.coverColor);
+            if (typeof parsed.pageColor === 'string') setPageColor(parsed.pageColor);
+            if (typeof parsed.soundEnabled === 'boolean') setSoundEnabled(parsed.soundEnabled);
+          }
+        } catch {
+          // Ignora errori localStorage
+        }
       }
-    } catch {
-      // Ignora errori di lettura localStorage
-    } finally {
-      setStyleHydrated(true);
+
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!active) return;
+        if (user) {
+          setUserId(user.id);
+          const { data } = await supabase
+            .from('binder_settings')
+            .select('cover_color, page_color, cover_image_url, sound_enabled')
+            .eq('user_id', user.id)
+            .maybeSingle();
+
+          if (!active) return;
+          if (data) {
+            if (typeof data.cover_color === 'string') setCoverColor(data.cover_color);
+            if (typeof data.page_color === 'string') setPageColor(data.page_color);
+            if (typeof data.cover_image_url === 'string') setCoverImageUrl(data.cover_image_url);
+            if (typeof data.sound_enabled === 'boolean') setSoundEnabled(data.sound_enabled);
+          }
+        }
+      } catch {
+        // Ignora errori rete
+      } finally {
+        if (active) setStyleHydrated(true);
+      }
     }
+
+    loadSettings();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // 2. Salva copertina e colori solo dopo l'idratazione iniziale
+  // 2. Salva stile in localStorage e su Supabase quando cambia
   useEffect(() => {
-    if (!styleHydrated || typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          coverImageUrl,
-          coverColor,
-          pageColor,
-          soundEnabled,
-        })
-      );
-    } catch {
+    if (!styleHydrated) return;
+
+    let effectiveCoverImg = coverImageUrl;
+
+    if (typeof window !== 'undefined') {
       try {
         window.localStorage.setItem(
           STORAGE_KEY,
           JSON.stringify({
-            coverImageUrl: '',
+            coverImageUrl: effectiveCoverImg,
             coverColor,
             pageColor,
             soundEnabled,
           })
         );
       } catch {
-        // Ignora
+        // Se l'immagine supera la quota di localStorage, non la blocchiamo su Supabase
+        try {
+          window.localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              coverImageUrl: '',
+              coverColor,
+              pageColor,
+              soundEnabled,
+            })
+          );
+        } catch {
+          // Ignora
+        }
       }
     }
-  }, [styleHydrated, coverImageUrl, coverColor, pageColor, soundEnabled]);
+
+    if (!userId) return;
+
+    const timer = setTimeout(async () => {
+      const { error } = await supabase.from('binder_settings').upsert(
+        {
+          user_id: userId,
+          cover_color: coverColor,
+          page_color: pageColor,
+          cover_image_url: effectiveCoverImg,
+          sound_enabled: soundEnabled,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
+      if (!error) {
+        setSaveFeedback('✓ Stile salvato');
+        setTimeout(() => setSaveFeedback(''), 1800);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [styleHydrated, userId, coverImageUrl, coverColor, pageColor, soundEnabled]);
 
   // 3. Mantieni sincronizzato l'ordine quando cambia la lista delle carte
   useEffect(() => {
@@ -292,14 +367,21 @@ export default function VirtualBinder({
 
   return (
     <div className="w-full space-y-6 text-slate-100">
-      {/* Pannello personalizzazione copertina, fogli e ordinamento (sempre visibile) */}
+      {/* Pannello personalizzazione copertina, fogli e ordinamento */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-bold text-amber-400">{title}</h2>
-            <p className="text-xs text-slate-400">
-              Personalizza copertina, colore dei fogli e riordina senza girare pagina
-            </p>
+          <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-base font-bold text-amber-400">{title}</h2>
+              <p className="text-xs text-slate-400">
+                Personalizza copertina, colore dei fogli e riordina senza girare pagina
+              </p>
+            </div>
+            {saveFeedback && (
+              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                {saveFeedback}
+              </span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -395,7 +477,7 @@ export default function VirtualBinder({
             onClick={handleToggleBinder}
             style={{
               backgroundColor: coverColor,
-              backgroundImage: coverImageUrl ? `url(${coverImageUrl})` : undefined,
+              backgroundImage: coverImageUrl ? `url("${coverImageUrl}")` : undefined,
             }}
             className="group relative w-72 sm:w-80 h-96 rounded-r-3xl rounded-l-lg border-l-8 border-l-black/40 shadow-2xl bg-cover bg-center overflow-hidden flex flex-col justify-between p-6 text-left transition-transform hover:scale-[1.02]"
           >
