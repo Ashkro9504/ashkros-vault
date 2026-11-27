@@ -18,35 +18,83 @@ interface TradeCard {
   is_favorite?: boolean;
 }
 
+interface TraderProfile {
+  id: string;
+  displayName: string;
+  avatarUrl: string;
+}
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'AV';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
+
+function TraderAvatar({
+  profile,
+  size = 'md',
+}: {
+  profile: TraderProfile;
+  size?: 'sm' | 'md';
+}) {
+  const dims = size === 'sm' ? 'w-7 h-7 text-[10px]' : 'w-10 h-10 text-xs';
+
+  if (profile.avatarUrl) {
+    return (
+      <img
+        src={profile.avatarUrl}
+        alt={profile.displayName}
+        className={`${dims} rounded-full object-cover border border-amber-400/60 bg-slate-800 shrink-0`}
+      />
+    );
+  }
+
+  return (
+    <span
+      className={`${dims} rounded-full bg-amber-500/20 border border-amber-400/50 text-amber-300 font-extrabold flex items-center justify-center shrink-0`}
+    >
+      {getInitials(profile.displayName)}
+    </span>
+  );
+}
+
 function StylizedChair({
-  label,
+  profile,
+  roleBadge,
   side,
   active,
 }: {
-  label: string;
+  profile: TraderProfile;
+  roleBadge: string;
   side: 'left' | 'right';
   active?: boolean;
 }) {
   return (
     <div
-      className={`flex flex-col items-center gap-1.5 select-none ${
+      className={`flex flex-col gap-1.5 select-none ${
         side === 'left' ? 'items-start sm:items-center' : 'items-end sm:items-center'
       }`}
     >
-      <span
-        className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+      <div
+        className={`flex items-center gap-2 px-3 py-1 rounded-full border ${
           active
-            ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-            : 'bg-slate-900 border-slate-700 text-slate-300'
+            ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+            : 'bg-slate-900 border-slate-700 text-slate-200'
         }`}
       >
-        🪑 {label}
-      </span>
+        <TraderAvatar profile={profile} size="sm" />
+        <div className="leading-tight">
+          <span className="text-[11px] font-bold block">{profile.displayName}</span>
+          <span className="text-[9px] text-amber-300/80 block">{roleBadge}</span>
+        </div>
+      </div>
+
       <svg
         viewBox="0 0 80 72"
         className="w-16 h-14 text-slate-600"
@@ -91,6 +139,17 @@ export default function TradingRoomPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const [requesterProfile, setRequesterProfile] = useState<TraderProfile>({
+    id: '',
+    displayName: 'Giocatore',
+    avatarUrl: '',
+  });
+  const [invitedProfile, setInvitedProfile] = useState<TraderProfile>({
+    id: '',
+    displayName: 'In attesa di invito',
+    avatarUrl: '',
+  });
+
   const [myCards, setMyCards] = useState<TradeCard[]>([]);
   const [partnerCards, setPartnerCards] = useState<TradeCard[]>([]);
 
@@ -104,6 +163,46 @@ export default function TradingRoomPage() {
   const [myAccepted, setMyAccepted] = useState(false);
   const [partnerAccepted, setPartnerAccepted] = useState(false);
   const [tradeCompleted, setTradeCompleted] = useState(false);
+
+  const fetchTraderProfile = async (
+    userId: string,
+    fallbackName: string,
+    fallbackAvatar = ''
+  ): Promise<TraderProfile> => {
+    const cleanId = userId.trim();
+    if (!cleanId) {
+      return {
+        id: '',
+        displayName: fallbackName,
+        avatarUrl: fallbackAvatar,
+      };
+    }
+
+    const { data } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', cleanId)
+      .maybeSingle();
+
+    const nameFromDb =
+      data?.full_name ||
+      data?.username ||
+      data?.display_name ||
+      data?.name ||
+      fallbackName;
+
+    const avatarFromDb =
+      data?.avatar_url ||
+      data?.photo_url ||
+      data?.image_url ||
+      fallbackAvatar;
+
+    return {
+      id: cleanId,
+      displayName: String(nameFromDb || fallbackName),
+      avatarUrl: String(avatarFromDb || ''),
+    };
+  };
 
   useEffect(() => {
     let active = true;
@@ -121,6 +220,19 @@ export default function TradingRoomPage() {
       }
 
       setCurrentUser(user);
+
+      const metaName =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.username ||
+        user.user_metadata?.name ||
+        user.email?.split('@')[0] ||
+        'Giocatore';
+      const metaAvatar =
+        user.user_metadata?.avatar_url || user.user_metadata?.picture || '';
+
+      const profileA = await fetchTraderProfile(user.id, metaName, metaAvatar);
+      if (!active) return;
+      setRequesterProfile(profileA);
 
       const { data: ownCards, error } = await supabase
         .from('user_cards')
@@ -149,12 +261,26 @@ export default function TradingRoomPage() {
     setErrorMsg('');
     setStatusMsg('');
     setTradeCompleted(false);
+    setMyAccepted(false);
+    setPartnerAccepted(false);
     setSelectedPartnerCardIds([]);
 
     if (!trimmed) {
       setPartnerCards([]);
+      setInvitedProfile({
+        id: '',
+        displayName: 'In attesa di invito',
+        avatarUrl: '',
+      });
       return;
     }
+
+    const profileB = await fetchTraderProfile(
+      trimmed,
+      `Collezionista (${trimmed.slice(0, 6)})`,
+      ''
+    );
+    setInvitedProfile(profileB);
 
     const { data, error } = await supabase
       .from('user_cards')
@@ -163,14 +289,16 @@ export default function TradingRoomPage() {
 
     if (error) {
       setErrorMsg(
-        `Impossibile leggere il binder dell'Utente B (${error.message}). Verifica la policy RLS per la lettura in scambio.`
+        `Impossibile leggere il binder di ${profileB.displayName} (${error.message}). Verifica la policy RLS per la lettura in scambio.`
       );
       setPartnerCards([]);
       return;
     }
 
     setPartnerCards(data || []);
-    setStatusMsg(`Binder Utente B caricato (${(data || []).length} carte).`);
+    setStatusMsg(
+      `Binder di ${profileB.displayName} caricato (${(data || []).length} carte).`
+    );
   };
 
   const toggleCardSelection = (
@@ -304,27 +432,28 @@ export default function TradingRoomPage() {
         setSelectedPartnerCardIds([]);
         setTradeCompleted(true);
         setStatusMsg(
-          `Scambio completato! Proprietario originale conservato e nuovo proprietario registrato (Conguaglio dichiarato: A €${cashA.toFixed(
+          `Scambio completato tra ${requesterProfile.displayName} e ${invitedProfile.displayName}! Proprietario originale conservato e nuovo proprietario registrato (Conguaglio dichiarato: ${requesterProfile.displayName} €${cashA.toFixed(
             2
-          )} / B €${cashB.toFixed(2)}).`
+          )} / ${invitedProfile.displayName} €${cashB.toFixed(2)}).`
         );
       } catch (err: any) {
         setErrorMsg(err?.message || 'Errore durante il trasferimento delle carte.');
       }
     } else {
       setStatusMsg(
-        `Hai accettato l'offerta (A: ${selectedMyCardIds.length} carte + €${cashA.toFixed(
+        `${requesterProfile.displayName} ha accettato l'offerta (${requesterProfile.displayName}: ${selectedMyCardIds.length} carte + €${cashA.toFixed(
           2
-        )} | B: ${selectedPartnerCardIds.length} carte + €${cashB.toFixed(
+        )} | ${invitedProfile.displayName}: ${selectedPartnerCardIds.length} carte + €${cashB.toFixed(
           2
-        )}). In attesa della conferma dell'Utente B.`
+        )}). In attesa della conferma di ${invitedProfile.displayName}.`
       );
     }
   };
 
   const renderBinderColumn = useMemo(() => {
     return function BinderBlock({
-      title,
+      profile,
+      roleLabel,
       cards,
       selectedIds,
       onToggle,
@@ -332,7 +461,8 @@ export default function TradingRoomPage() {
       onCashChange,
       accepted,
     }: {
-      title: string;
+      profile: TraderProfile;
+      roleLabel: string;
       cards: TradeCard[];
       selectedIds: string[];
       onToggle: (card: TradeCard) => void;
@@ -344,16 +474,22 @@ export default function TradingRoomPage() {
 
       return (
         <div className="bg-slate-900/95 border border-slate-700/80 rounded-2xl p-4 space-y-3 shadow-lg">
-          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2">
-            <div>
-              <h3 className="text-sm font-bold text-amber-400">{title}</h3>
-              <p className="text-[11px] text-slate-400">
-                Selezionate: <span className="text-slate-100 font-bold">{selectedIds.length}</span> /{' '}
-                {cards.length} carte
-              </p>
+          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <TraderAvatar profile={profile} size="md" />
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-amber-400 truncate">
+                  Binder di {profile.displayName}
+                </h3>
+                <p className="text-[11px] text-slate-400 truncate">
+                  {roleLabel} • Selezionate:{' '}
+                  <span className="text-slate-100 font-bold">{selectedIds.length}</span> /{' '}
+                  {cards.length} carte
+                </p>
+              </div>
             </div>
             <span
-              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
                 accepted
                   ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                   : 'bg-slate-800 text-slate-400'
@@ -477,7 +613,7 @@ export default function TradingRoomPage() {
           {/* Importo in euro dichiarato (senza alcun metodo di pagamento sul sito) */}
           <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1">
             <label className="block text-[11px] font-semibold text-slate-300">
-              Conguaglio in € (solo indicazione testuale, nessun pagamento sul sito)
+              Conguaglio in € di {profile.displayName} (solo indicazione testuale, nessun pagamento sul sito)
             </label>
             <input
               type="number"
@@ -544,20 +680,24 @@ export default function TradingRoomPage() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-8 pt-6 space-y-6">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <p className="text-xs font-bold text-slate-200">
-              Utente A (Tu): <span className="font-mono text-amber-400">{currentUser?.email}</span>
-            </p>
-            <p className="text-[11px] text-slate-400">
-              Inserisci l'ID utente di Utente B per caricare il suo binder sul tavolo
-            </p>
+          <div className="flex items-center gap-3 min-w-0">
+            <TraderAvatar profile={requesterProfile} size="md" />
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-xs font-bold text-slate-200 truncate">
+                Richiedente scambio:{' '}
+                <span className="text-amber-400">{requesterProfile.displayName}</span>
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Inserisci l'ID dell'utente invitato per caricare il suo binder sul tavolo
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <input
               type="text"
               value={partnerUserId}
               onChange={(e) => setPartnerUserId(e.target.value)}
-              placeholder="UUID Utente B..."
+              placeholder="UUID utente invitato..."
               className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 w-full sm:w-72"
             />
             <button
@@ -565,7 +705,7 @@ export default function TradingRoomPage() {
               onClick={() => loadPartnerBinder(partnerUserId)}
               className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shrink-0"
             >
-              Carica Binder B
+              Invita / Carica
             </button>
           </div>
         </div>
@@ -584,17 +724,28 @@ export default function TradingRoomPage() {
 
         <section className="space-y-3">
           <div className="flex items-center justify-between px-4">
-            <StylizedChair label="Seduta Utente A" side="left" active={myAccepted} />
+            <StylizedChair
+              profile={requesterProfile}
+              roleBadge="Richiede lo scambio"
+              side="left"
+              active={myAccepted}
+            />
             <span className="text-xs font-bold uppercase tracking-widest text-amber-400/80 hidden sm:inline">
               Tavolo Scambi
             </span>
-            <StylizedChair label="Seduta Utente B" side="right" active={partnerAccepted} />
+            <StylizedChair
+              profile={invitedProfile}
+              roleBadge="Invitato allo scambio"
+              side="right"
+              active={partnerAccepted}
+            />
           </div>
 
           <div className="rounded-3xl border-2 border-amber-500/30 bg-gradient-to-b from-emerald-950/45 via-slate-900 to-slate-950 p-4 sm:p-6 shadow-2xl space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {renderBinderColumn({
-                title: 'Binder Utente A (Il tuo)',
+                profile: requesterProfile,
+                roleLabel: 'Richiede lo scambio',
                 cards: myCards,
                 selectedIds: selectedMyCardIds,
                 onToggle: (card) =>
@@ -605,7 +756,8 @@ export default function TradingRoomPage() {
               })}
 
               {renderBinderColumn({
-                title: 'Binder Utente B (Controparte)',
+                profile: invitedProfile,
+                roleLabel: 'Invitato allo scambio',
                 cards: partnerCards,
                 selectedIds: selectedPartnerCardIds,
                 onToggle: (card) =>
@@ -620,11 +772,12 @@ export default function TradingRoomPage() {
               <div className="text-xs space-y-1">
                 <p className="font-bold text-amber-400">Riepilogo Offerta sul Tavolo</p>
                 <p className="text-slate-300">
-                  Utente A offre: <strong>{selectedMyCardIds.length}</strong> carte +{' '}
-                  <strong>€ {(Number(myCashEuro) || 0).toFixed(2)}</strong>
+                  {requesterProfile.displayName} offre: <strong>{selectedMyCardIds.length}</strong>{' '}
+                  carte + <strong>€ {(Number(myCashEuro) || 0).toFixed(2)}</strong>
                 </p>
                 <p className="text-slate-300">
-                  Utente B offre: <strong>{selectedPartnerCardIds.length}</strong> carte +{' '}
+                  {invitedProfile.displayName} offre:{' '}
+                  <strong>{selectedPartnerCardIds.length}</strong> carte +{' '}
                   <strong>€ {(Number(partnerCashEuro) || 0).toFixed(2)}</strong>
                 </p>
                 <p className="text-[11px] text-slate-500">
