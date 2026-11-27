@@ -15,6 +15,7 @@ interface TradeCard {
   image_url?: string | null;
   card_image?: string | null;
   public_qr_code_id?: string | null;
+  is_favorite?: boolean;
 }
 
 const supabase = createClient(
@@ -52,7 +53,6 @@ function StylizedChair({
         fill="none"
         aria-hidden="true"
       >
-        {/* Schienale stilizzato */}
         <rect
           x="16"
           y="6"
@@ -62,7 +62,6 @@ function StylizedChair({
           className="fill-slate-800 stroke-amber-500/50"
           strokeWidth="2.5"
         />
-        {/* Seduta */}
         <rect
           x="12"
           y="32"
@@ -72,7 +71,6 @@ function StylizedChair({
           className="fill-slate-700 stroke-slate-500"
           strokeWidth="2.5"
         />
-        {/* Gambe */}
         <path
           d="M20 44V66M60 44V66"
           className="stroke-slate-500"
@@ -176,17 +174,25 @@ export default function TradingRoomPage() {
   };
 
   const toggleCardSelection = (
-    cardId: string,
+    card: TradeCard,
     currentList: string[],
     setter: (next: string[]) => void
   ) => {
     if (tradeCompleted) return;
+    if (card.is_favorite) {
+      setErrorMsg(
+        `"${card.card_name}" è nei Preferiti: rimuovila dai preferiti nel binder prima di metterla in scambio.`
+      );
+      return;
+    }
+
+    setErrorMsg('');
     setMyAccepted(false);
     setPartnerAccepted(false);
     setter(
-      currentList.includes(cardId)
-        ? currentList.filter((id) => id !== cardId)
-        : [...currentList, cardId]
+      currentList.includes(card.id)
+        ? currentList.filter((id) => id !== card.id)
+        : [...currentList, card.id]
     );
   };
 
@@ -218,6 +224,20 @@ export default function TradingRoomPage() {
 
     if (!currentUser) return;
 
+    const blockedMy = myCards.filter(
+      (c) => selectedMyCardIds.includes(c.id) && c.is_favorite
+    );
+    const blockedPartner = partnerCards.filter(
+      (c) => selectedPartnerCardIds.includes(c.id) && c.is_favorite
+    );
+
+    if (blockedMy.length > 0 || blockedPartner.length > 0) {
+      setErrorMsg(
+        'Una o più carte selezionate sono nei Preferiti e non possono essere scambiate finché restano nei preferiti.'
+      );
+      return;
+    }
+
     const cashA = Math.max(0, Number(myCashEuro) || 0);
     const cashB = Math.max(0, Number(partnerCashEuro) || 0);
 
@@ -233,7 +253,6 @@ export default function TradingRoomPage() {
 
     setMyAccepted(true);
 
-    // Se anche l'altro lato ha già accettato, esegui subito il trasferimento proprietà
     if (partnerAccepted) {
       try {
         for (const cardId of selectedMyCardIds) {
@@ -316,11 +335,13 @@ export default function TradingRoomPage() {
       title: string;
       cards: TradeCard[];
       selectedIds: string[];
-      onToggle: (id: string) => void;
+      onToggle: (card: TradeCard) => void;
       cashValue: string;
       onCashChange: (val: string) => void;
       accepted: boolean;
     }) {
+      const favorites = cards.filter((c) => Boolean(c.is_favorite));
+
       return (
         <div className="bg-slate-900/95 border border-slate-700/80 rounded-2xl p-4 space-y-3 shadow-lg">
           <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2">
@@ -342,6 +363,40 @@ export default function TradingRoomPage() {
             </span>
           </div>
 
+          {/* Vetrina Preferiti visibile durante la trattativa */}
+          <div className="bg-amber-500/5 border border-amber-500/25 rounded-xl p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-bold text-amber-300">
+                ⭐ Preferiti in Vetrina ({favorites.length})
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Visibili • Non scambiabili
+              </span>
+            </div>
+
+            {favorites.length === 0 ? (
+              <p className="text-[11px] text-slate-500">Nessuna carta nei preferiti.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {favorites.map((fav) => {
+                  const favPassportId = fav.public_qr_code_id || fav.id;
+                  return (
+                    <a
+                      key={fav.id}
+                      href={`/card/${favPassportId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950 border border-amber-500/30 text-[10px] text-amber-200 hover:border-amber-400"
+                    >
+                      <span>⭐ {fav.card_name}</span>
+                      <span className="text-sky-400 underline">Passaporto ↗</span>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Binder virtuale con carte e link al Passaporto */}
           <div className="max-h-72 overflow-y-auto pr-1 grid grid-cols-2 sm:grid-cols-3 gap-2.5 bg-slate-950/80 border border-slate-800 rounded-xl p-2.5">
             {cards.length === 0 ? (
@@ -350,6 +405,7 @@ export default function TradingRoomPage() {
               </p>
             ) : (
               cards.map((card) => {
+                const isFav = Boolean(card.is_favorite);
                 const isSelected = selectedIds.includes(card.id);
                 const imgSrc = card.image_url || card.card_image || '';
                 const passportId = card.public_qr_code_id || card.id;
@@ -357,13 +413,21 @@ export default function TradingRoomPage() {
                 return (
                   <div
                     key={card.id}
-                    onClick={() => onToggle(card.id)}
-                    className={`cursor-pointer rounded-xl p-2 border transition flex flex-col justify-between ${
-                      isSelected
-                        ? 'bg-amber-500/15 border-amber-400 ring-1 ring-amber-400/50'
-                        : 'bg-slate-900 border-slate-800 hover:border-slate-600'
+                    onClick={() => onToggle(card)}
+                    className={`relative rounded-xl p-2 border transition flex flex-col justify-between ${
+                      isFav
+                        ? 'bg-slate-900/70 border-amber-500/40 opacity-85 cursor-not-allowed'
+                        : isSelected
+                          ? 'cursor-pointer bg-amber-500/15 border-amber-400 ring-1 ring-amber-400/50'
+                          : 'cursor-pointer bg-slate-900 border-slate-800 hover:border-slate-600'
                     }`}
                   >
+                    {isFav && (
+                      <span className="mb-1 inline-block self-start px-1.5 py-0.5 rounded bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[9px] font-bold">
+                        ⭐ Preferito • Bloccata
+                      </span>
+                    )}
+
                     <div className="h-24 flex items-center justify-center bg-slate-950 rounded-lg overflow-hidden mb-1.5">
                       {imgSrc ? (
                         <img
@@ -387,8 +451,12 @@ export default function TradingRoomPage() {
                         className="flex items-center justify-between pt-1"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <span className="text-[10px] font-bold text-amber-300">
-                          {isSelected ? '✓ In offerta' : 'Seleziona'}
+                        <span
+                          className={`text-[10px] font-bold ${
+                            isFav ? 'text-amber-300/80' : 'text-amber-300'
+                          }`}
+                        >
+                          {isFav ? 'Non scambiabile' : isSelected ? '✓ In offerta' : 'Seleziona'}
                         </span>
                         <a
                           href={`/card/${passportId}`}
@@ -439,7 +507,6 @@ export default function TradingRoomPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
-      {/* Header Ashkro's Vault */}
       <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 sm:px-8 py-4">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -476,7 +543,6 @@ export default function TradingRoomPage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-8 pt-6 space-y-6">
-        {/* Selezione controparte (Utente B) */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="space-y-0.5">
             <p className="text-xs font-bold text-slate-200">
@@ -516,7 +582,6 @@ export default function TradingRoomPage() {
           </div>
         )}
 
-        {/* Due sedie stilizzate + Tavolo Virtuale */}
         <section className="space-y-3">
           <div className="flex items-center justify-between px-4">
             <StylizedChair label="Seduta Utente A" side="left" active={myAccepted} />
@@ -532,8 +597,8 @@ export default function TradingRoomPage() {
                 title: 'Binder Utente A (Il tuo)',
                 cards: myCards,
                 selectedIds: selectedMyCardIds,
-                onToggle: (id) =>
-                  toggleCardSelection(id, selectedMyCardIds, setSelectedMyCardIds),
+                onToggle: (card) =>
+                  toggleCardSelection(card, selectedMyCardIds, setSelectedMyCardIds),
                 cashValue: myCashEuro,
                 onCashChange: setMyCashEuro,
                 accepted: myAccepted,
@@ -543,15 +608,14 @@ export default function TradingRoomPage() {
                 title: 'Binder Utente B (Controparte)',
                 cards: partnerCards,
                 selectedIds: selectedPartnerCardIds,
-                onToggle: (id) =>
-                  toggleCardSelection(id, selectedPartnerCardIds, setSelectedPartnerCardIds),
+                onToggle: (card) =>
+                  toggleCardSelection(card, selectedPartnerCardIds, setSelectedPartnerCardIds),
                 cashValue: partnerCashEuro,
                 onCashChange: setPartnerCashEuro,
                 accepted: partnerAccepted,
               })}
             </div>
 
-            {/* Riepilogo offerta & Azioni Accetta / Rifiuta / Modifica */}
             <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div className="text-xs space-y-1">
                 <p className="font-bold text-amber-400">Riepilogo Offerta sul Tavolo</p>

@@ -24,6 +24,7 @@ interface CardItem {
   language?: string | null;
   public_qr_code_id?: string | null;
   binder_order?: number | null;
+  is_favorite?: boolean;
   created_at: string;
 }
 
@@ -41,7 +42,9 @@ export default function BinderPage() {
 
   // Stati per Ricerca e Filtri
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'custom' | 'latest' | 'oldest' | 'alphabetical'>('custom');
+  const [sortBy, setSortBy] = useState<
+    'favorites-first' | 'custom' | 'latest' | 'oldest' | 'alphabetical'
+  >('favorites-first');
 
   const router = useRouter();
 
@@ -91,6 +94,30 @@ export default function BinderPage() {
     setLoading(false);
   }
 
+  const handleToggleFavorite = async (card: CardItem) => {
+    if (!user) return;
+    const nextFav = !Boolean(card.is_favorite);
+
+    setCards((prev) =>
+      prev.map((item) => (item.id === card.id ? { ...item, is_favorite: nextFav } : item))
+    );
+
+    const { error } = await supabase
+      .from('user_cards')
+      .update({ is_favorite: nextFav })
+      .eq('id', card.id)
+      .eq('user_id', user.id);
+
+    if (error) {
+      setErrorMsg(`Errore aggiornamento preferiti: ${error.message}`);
+      setCards((prev) =>
+        prev.map((item) =>
+          item.id === card.id ? { ...item, is_favorite: card.is_favorite } : item
+        )
+      );
+    }
+  };
+
   const handleSaveBinderOrder = async (orderedIds: string[]) => {
     if (!user) return;
 
@@ -134,6 +161,15 @@ export default function BinderPage() {
         (card.game_title && card.game_title.toLowerCase().includes(searchQuery.toLowerCase()))
     )
     .sort((a, b) => {
+      if (sortBy === 'favorites-first') {
+        const favA = a.is_favorite ? 0 : 1;
+        const favB = b.is_favorite ? 0 : 1;
+        if (favA !== favB) return favA - favB;
+        const orderA = a.binder_order ?? Number.MAX_SAFE_INTEGER;
+        const orderB = b.binder_order ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
       if (sortBy === 'custom') {
         const orderA = a.binder_order ?? Number.MAX_SAFE_INTEGER;
         const orderB = b.binder_order ?? Number.MAX_SAFE_INTEGER;
@@ -159,6 +195,7 @@ export default function BinderPage() {
     cardNumber: card.card_number || undefined,
     imageUrl: card.image_url || card.card_image || undefined,
     rarity: card.rarity || undefined,
+    isFavorite: Boolean(card.is_favorite),
     customOrder: card.binder_order ?? index,
   }));
 
@@ -235,12 +272,13 @@ export default function BinderPage() {
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            <span className="text-xs text-slate-400 whitespace-nowrap">Filtra per:</span>
+            <span className="text-xs text-slate-400 whitespace-nowrap">Ordina binder:</span>
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
               className="flex-1 sm:flex-none bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
             >
+              <option value="favorites-first">⭐ Preferiti prima</option>
               <option value="custom">Ordine Binder salvato</option>
               <option value="latest">Ultimo inserito</option>
               <option value="oldest">Primo inserito</option>
@@ -287,17 +325,37 @@ export default function BinderPage() {
               return (
                 <div
                   key={card.id}
-                  className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-xl"
+                  className={`bg-slate-900 border rounded-2xl p-4 flex flex-col justify-between shadow-xl ${
+                    card.is_favorite ? 'border-amber-400/70' : 'border-slate-800'
+                  }`}
                 >
                   <div>
-                    {/* Badge del Gioco TCG */}
-                    <div className="mb-3 flex items-center justify-between">
+                    {/* Badge del Gioco TCG + Preferito */}
+                    <div className="mb-3 flex items-center justify-between gap-1.5">
                       <span className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold px-2.5 py-1 rounded-md tracking-wider">
                         🎮 {card.game_title || 'Pokémon'}
                       </span>
-                      <span className="bg-slate-950 border border-slate-800 text-slate-300 text-[10px] font-bold px-2 py-1 rounded-lg">
-                        🌐 {card.language || 'IT'}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleFavorite(card)}
+                          className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition ${
+                            card.is_favorite
+                              ? 'bg-amber-500 text-slate-950 border-amber-400'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-amber-500/50'
+                          }`}
+                          title={
+                            card.is_favorite
+                              ? 'Rimuovi dai preferiti (sblocca per scambi)'
+                              : 'Aggiungi ai preferiti (esposta in vetrina, bloccata agli scambi)'
+                          }
+                        >
+                          {card.is_favorite ? '⭐ Preferito' : '☆ Preferito'}
+                        </button>
+                        <span className="bg-slate-950 border border-slate-800 text-slate-300 text-[10px] font-bold px-2 py-1 rounded-lg">
+                          🌐 {card.language || 'IT'}
+                        </span>
+                      </div>
                     </div>
 
                     {displayImage ? (

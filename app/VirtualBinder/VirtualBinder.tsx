@@ -10,6 +10,7 @@ export interface BinderCardItem {
   cardNumber?: string;
   imageUrl?: string;
   rarity?: string;
+  isFavorite?: boolean;
   customOrder?: number;
 }
 
@@ -21,7 +22,7 @@ interface VirtualBinderProps {
   onCardClick?: (card: BinderCardItem) => void;
 }
 
-type SortMode = 'custom' | 'name-asc' | 'name-desc' | 'number-asc';
+type SortMode = 'favorites-first' | 'custom' | 'name-asc' | 'name-desc' | 'number-asc';
 
 const STORAGE_KEY = 'ashkros_virtual_binder_style_v1';
 
@@ -38,7 +39,7 @@ export default function VirtualBinder({
   const [coverColor, setCoverColor] = useState('#1e293b');
   const [pageColor, setPageColor] = useState('#f8fafc');
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [sortMode, setSortMode] = useState<SortMode>('custom');
+  const [sortMode, setSortMode] = useState<SortMode>('favorites-first');
   const [customOrderIds, setCustomOrderIds] = useState<string[]>(() =>
     cards.map((c) => c.id)
   );
@@ -119,6 +120,14 @@ export default function VirtualBinder({
       .map((id) => mapById.get(id))
       .filter((c): c is BinderCardItem => Boolean(c));
 
+    if (sortMode === 'favorites-first') {
+      return [...ordered].sort((a, b) => {
+        const favA = a.isFavorite ? 0 : 1;
+        const favB = b.isFavorite ? 0 : 1;
+        if (favA !== favB) return favA - favB;
+        return 0;
+      });
+    }
     if (sortMode === 'custom') return ordered;
     if (sortMode === 'name-asc') {
       return [...ordered].sort((a, b) => a.name.localeCompare(b.name, 'it'));
@@ -340,6 +349,7 @@ export default function VirtualBinder({
               onChange={(e) => setSortMode(e.target.value as SortMode)}
               className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100"
             >
+              <option value="favorites-first">⭐ Preferiti prima</option>
               <option value="custom">Personalizzato (Drag / Frecce)</option>
               <option value="name-asc">Nome (A → Z)</option>
               <option value="name-desc">Nome (Z → A)</option>
@@ -490,9 +500,20 @@ export default function VirtualBinder({
                         className={`group relative bg-white/95 border rounded-lg p-1.5 shadow-sm flex flex-col justify-between cursor-grab active:cursor-grabbing transition ${
                           draggedCardId === card.id
                             ? 'border-amber-500 ring-2 ring-amber-400/50'
-                            : 'border-slate-300'
+                            : card.isFavorite
+                              ? 'border-amber-400 ring-1 ring-amber-300/60'
+                              : 'border-slate-300'
                         }`}
                       >
+                        {card.isFavorite && (
+                          <span
+                            title="Carta nei Preferiti"
+                            className="absolute top-1 right-1 z-10 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-extrabold shadow"
+                          >
+                            ⭐
+                          </span>
+                        )}
+
                         <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden rounded bg-slate-100">
                           {card.imageUrl ? (
                             <img
